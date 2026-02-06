@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- NuGet Package Metadata -->
+    <PackageId>zachtbeer.SqlSchemaHasher</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>zachtbeer</Authors>
+    <Company>zachtbeer</Company>
+    <Description>Deterministic SHA256 hashing for SQL Server database schemas. Extract and hash table definitions, stored procedures, and user-defined types for schema comparison and change detection.</Description>
+    <PackageTags>sqlserver;schema;hash;database;migration;dacpac</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/zachtbeer/SqlSchemaHasher</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/zachtbeer/SqlSchemaHasher</PackageProjectUrl>
+    <Copyright>Copyright (c) 2026 zachtbeer</Copyright>
+    <PackageReleaseNotes>https://github.com/zachtbeer/SqlSchemaHasher/releases</PackageReleaseNotes>
+
+    <!-- Suppress warnings from transitive dependencies that don't officially target net6.0/net7.0 -->
+    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.2" />
+  </ItemGroup>
+</Project>

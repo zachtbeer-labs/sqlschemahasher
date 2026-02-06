@@ -1,0 +1,29 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: nuget-
+
+    - run: dotnet restore SqlSchemaHasher.sln
+    - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
+    - run: dotnet test SqlSchemaHasher.sln -c Release --no-build --verbosity normal
+    - run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./artifacts
