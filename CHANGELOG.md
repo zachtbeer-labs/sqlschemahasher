@@ -21,4 +21,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Base64-encoded hash output for the public API
 - Static `SqlSchemaHash` facade with `GetHashAsync`, `ExtractSchemaAsync`, and `ComputeHash`
 
-[1.0.0]: https://github.com/zachtbeer/SqlSchemaHasher/releases/tag/v1.0.0
+[1.0.0]: https://github.com/zachtbeer-labs/sqlschemahasher/releases/tag/v1.0.0

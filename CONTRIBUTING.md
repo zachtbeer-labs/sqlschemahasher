@@ -4,7 +4,7 @@ Thanks for your interest in contributing to SqlSchemaHasher! Here's everything y
 
 ## Reporting Bugs / Requesting Features
 
-Use [GitHub Issues](https://github.com/zachtbeer/SqlSchemaHasher/issues). For bugs, include:
+Use [GitHub Issues](https://github.com/zachtbeer-labs/sqlschemahasher/issues). For bugs, include:
 
 - What you expected to happen
 - What actually happened
