@@ -13,8 +13,10 @@ public class SqlServerFixture
     [AssemblyInitialize]
     public static async Task AssemblyInitialize(TestContext context)
     {
+        var image = Environment.GetEnvironmentVariable("SQLSERVER_IMAGE") ?? "mcr.microsoft.com/mssql/server:2025-latest";
+
         _container = new MsSqlBuilder()
-            .WithImage("mcr.microsoft.com/mssql/server:2025-latest")
+            .WithImage(image)
             .WithPassword("DeepDishD@tabas3!")
             .Build();
 

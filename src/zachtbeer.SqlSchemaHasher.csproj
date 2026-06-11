@@ -6,17 +6,17 @@
     <!-- NuGet Package Metadata -->
     <PackageId>zachtbeer.SqlSchemaHasher</PackageId>
     <Version>1.0.0</Version>
-    <Authors>zachtbeer</Authors>
-    <Company>zachtbeer</Company>
+    <Authors>Zachtbeer Labs B.V.</Authors>
+    <Company>Zachtbeer Labs B.V.</Company>
     <Description>Deterministic SHA256 hashing for SQL Server database schemas. Extract and hash table definitions, stored procedures, and user-defined types for schema comparison and change detection.</Description>
-    <PackageTags>sqlserver;schema;hash;database;migration;dacpac</PackageTags>
+    <PackageTags>sqlserver;schema;hash;database;migration;dacpac;schema-drift;change-detection</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryType>git</RepositoryType>
-    <RepositoryUrl>https://github.com/zachtbeer/SqlSchemaHasher</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/zachtbeer/SqlSchemaHasher</PackageProjectUrl>
-    <Copyright>Copyright (c) 2026 zachtbeer</Copyright>
-    <PackageReleaseNotes>https://github.com/zachtbeer/SqlSchemaHasher/releases</PackageReleaseNotes>
+    <RepositoryUrl>https://github.com/zachtbeer-labs/sqlschemahasher</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/zachtbeer-labs/sqlschemahasher</PackageProjectUrl>
+    <Copyright>Copyright (c) 2026 Zachtbeer Labs B.V.</Copyright>
+    <PackageReleaseNotes>https://github.com/zachtbeer-labs/sqlschemahasher/releases</PackageReleaseNotes>
 
     <!-- Suppress warnings from transitive dependencies that don't officially target net6.0/net7.0 -->
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
