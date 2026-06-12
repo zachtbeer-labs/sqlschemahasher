@@ -33,12 +33,16 @@ public sealed class SchemaExtractor
 		await using var connection = new SqlConnection(connectionString);
 		await connection.OpenAsync();
 
-		var objectNamesToIgnore = resolvedOptions.ObjectNamesToIgnore;
+		// Diagram exclusions compose additively with the user's ignore set, so a custom
+		// ObjectNamesToIgnore doesn't silently drop them.
+		IReadOnlySet<string> objectNamesToIgnore = resolvedOptions.IgnoreSysDiagramObjects
+			? resolvedOptions.ObjectNamesToIgnore.Concat(SchemaHashOptions.SysDiagramObjectNames).ToHashSet(StringComparer.OrdinalIgnoreCase)
+			: resolvedOptions.ObjectNamesToIgnore;
 		var schemaFilter = resolvedOptions.SchemaFilter;
 
 		var tables = await ExtractTablesAsync(connection, objectNamesToIgnore);
 		var storedProcedures = await ExtractStoredProceduresAsync(connection, objectNamesToIgnore);
-		var userDefinedTableTypes = await ExtractUserDefinedTableTypesAsync(connection);
+		var userDefinedTableTypes = await ExtractUserDefinedTableTypesAsync(connection, objectNamesToIgnore);
 
 		// Apply schema filter if specified
 		if (!string.IsNullOrWhiteSpace(schemaFilter))
@@ -53,16 +57,16 @@ public sealed class SchemaExtractor
 
 	private async Task<List<TableSchema>> ExtractTablesAsync(SqlConnection connection, IReadOnlySet<string> objectNamesToIgnore)
 	{
-		// Query 1: Get all tables with schema names
+		// Query 1: Get all tables with schema names and their identity column (a table has at most one).
+		// Joins sys.identity_columns by object_id rather than resolving names through OBJECT_ID,
+		// which breaks for table names containing dots.
 		const string tablesQuery = @"
 			SELECT
 				SCHEMA_NAME(t.schema_id) AS SchemaName,
 				t.name AS TableName,
-				ic.COLUMN_NAME AS IdentityColumn
+				idc.name AS IdentityColumn
 			FROM sys.tables t
-			LEFT JOIN INFORMATION_SCHEMA.COLUMNS ic ON ic.TABLE_SCHEMA = SCHEMA_NAME(t.schema_id)
-				AND ic.TABLE_NAME = t.name
-				AND COLUMNPROPERTY(OBJECT_ID(ic.TABLE_SCHEMA + '.' + ic.TABLE_NAME), ic.COLUMN_NAME, 'IsIdentity') = 1
+			LEFT JOIN sys.identity_columns idc ON idc.object_id = t.object_id
 			WHERE t.type = 'U'
 			ORDER BY SchemaName, t.name";
 
@@ -73,7 +77,9 @@ public sealed class SchemaExtractor
 		if (tableInfos.Count == 0)
 			return new List<TableSchema>();
 
-		// Query 2: Get all columns for all tables in one query (with schema)
+		// Query 2: Get all columns for all tables in one query (with schema).
+		// Computed columns are joined from sys.computed_columns so a change to the formula (or to
+		// PERSISTED) is reflected in the hash; the formula alone is invisible in sys.columns.
 		const string columnsQuery = @"
 			SELECT
 				SCHEMA_NAME(t.schema_id) AS SchemaName,
@@ -83,19 +89,23 @@ public sealed class SchemaExtractor
 				c.max_length AS MaxLength,
 				c.precision AS Precision,
 				c.scale AS Scale,
-				c.is_nullable AS IsNullable
+				c.is_nullable AS IsNullable,
+				c.is_computed AS IsComputed,
+				cc.definition AS ComputedDefinition,
+				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted
 			FROM sys.tables t
 			INNER JOIN sys.columns c ON t.object_id = c.object_id
 			INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+			LEFT JOIN sys.computed_columns cc ON c.object_id = cc.object_id AND c.column_id = cc.column_id
 			WHERE t.type = 'U'
 			ORDER BY SchemaName, t.name, c.column_id";
 
-		var allColumns = (await connection.QueryAsync<(string SchemaName, string TableName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable)>(columnsQuery))
+		var allColumns = (await connection.QueryAsync<(string SchemaName, string TableName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted)>(columnsQuery))
 			.Where(c => !objectNamesToIgnore.Contains(c.TableName))
 			.GroupBy(c => (c.SchemaName, c.TableName))
 			.ToDictionary(
 				g => g.Key,
-				g => g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable)).OrderBy(c => c.Name).ToList());
+				g => g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList());
 
 		// Query 3: Get all index columns for all tables (with schema)
 		// Returns one row per index column; column aggregation is done in C# for SQL Server 2012 compatibility.
@@ -108,7 +118,10 @@ public sealed class SchemaExtractor
 				i.is_unique AS IsUnique,
 				i.is_primary_key AS IsPrimaryKey,
 				c.name AS ColumnName,
-				ic.key_ordinal AS KeyOrdinal
+				ic.key_ordinal AS KeyOrdinal,
+				ic.is_included_column AS IsIncluded,
+				CAST(ISNULL(ic.is_descending_key, 0) AS bit) AS IsDescending,
+				i.filter_definition AS FilterDefinition
 			FROM sys.tables t
 			INNER JOIN sys.indexes i ON t.object_id = i.object_id
 			INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -116,18 +129,28 @@ public sealed class SchemaExtractor
 			WHERE t.type = 'U' AND i.name IS NOT NULL
 			ORDER BY SchemaName, t.name, i.name, ic.key_ordinal";
 
-		var allIndexes = (await connection.QueryAsync<(string SchemaName, string TableName, string IndexName, string IndexType, bool IsUnique, bool IsPrimaryKey, string ColumnName, int KeyOrdinal)>(indexesQuery))
+		var allIndexes = (await connection.QueryAsync<(string SchemaName, string TableName, string IndexName, string IndexType, bool IsUnique, bool IsPrimaryKey, string ColumnName, int KeyOrdinal, bool IsIncluded, bool IsDescending, string? FilterDefinition)>(indexesQuery))
 			.Where(i => !objectNamesToIgnore.Contains(i.TableName))
 			.GroupBy(i => (i.SchemaName, i.TableName))
 			.ToDictionary(
 				g => g.Key,
-				g => g.GroupBy(i => (i.IndexName, i.IndexType, i.IsUnique, i.IsPrimaryKey))
+				// FilterDefinition is constant per index, so it joins the per-index grouping key.
+				g => g.GroupBy(i => (i.IndexName, i.IndexType, i.IsUnique, i.IsPrimaryKey, i.FilterDefinition))
 					.Select(ig =>
 					{
 						string description = BuildIndexDescription(ig.Key.IndexType, ig.Key.IsUnique, ig.Key.IsPrimaryKey);
-						string keyColumns = string.Join(", ", ig.OrderBy(c => c.KeyOrdinal).Select(c => c.ColumnName));
-						return new IndexSchema(ig.Key.IndexName, description, keyColumns);
-					}).OrderBy(i => i.Keys).ThenBy(i => i.Name).ToList());
+						// Key columns are ordered by key ordinal; columnstore columns all have key_ordinal 0,
+						// so ties are broken by name for determinism. Included columns are an unordered set
+						// and are kept separate from key columns, sorted by name. Descending key columns are
+						// suffixed with " DESC"; KeysWithoutDirection is only materialized when it differs
+						// so the calculator can ignore sort order without string parsing.
+						var orderedKeyColumns = ig.Where(c => !c.IsIncluded).OrderBy(c => c.KeyOrdinal).ThenBy(c => c.ColumnName, StringComparer.Ordinal).ToList();
+						string keyColumns = string.Join(", ", orderedKeyColumns.Select(c => c.ColumnName + (c.IsDescending ? " DESC" : "")));
+						string? keysWithoutDirection = orderedKeyColumns.Any(c => c.IsDescending) ? string.Join(", ", orderedKeyColumns.Select(c => c.ColumnName)) : null;
+						var includedColumns = ig.Where(c => c.IsIncluded).Select(c => c.ColumnName).OrderBy(c => c, StringComparer.Ordinal).ToList();
+						string? included = includedColumns.Count > 0 ? string.Join(", ", includedColumns) : null;
+						return new IndexSchema(ig.Key.IndexName, description, keyColumns, included, keysWithoutDirection, ig.Key.FilterDefinition);
+					}).OrderBy(i => i.Keys, StringComparer.Ordinal).ThenBy(i => i.Name, StringComparer.Ordinal).ToList());
 
 		// Query 4: Get all constraints (with schema)
 		// Returns one row per constraint column via UNION ALL; column aggregation is done in C# for SQL Server 2012 compatibility.
@@ -142,13 +165,16 @@ public sealed class SchemaExtractor
 			WHERE t.type = 'U'
 			UNION ALL
 			SELECT SCHEMA_NAME(t.schema_id), t.name, 'FOREIGN KEY', fk.name,
-				COL_NAME(fkc.parent_object_id, fkc.parent_column_id), fkc.constraint_column_id
+				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) + ' -> ' + SCHEMA_NAME(rt.schema_id) + '.' + rt.name + '.' + COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id),
+				fkc.constraint_column_id
 			FROM sys.tables t
 			INNER JOIN sys.foreign_keys fk ON t.object_id = fk.parent_object_id
 			INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+			INNER JOIN sys.tables rt ON fk.referenced_object_id = rt.object_id
 			WHERE t.type = 'U'
 			UNION ALL
-			SELECT SCHEMA_NAME(t.schema_id), t.name, 'DEFAULT', dc.name, dc.definition, 0
+			SELECT SCHEMA_NAME(t.schema_id), t.name, 'DEFAULT', dc.name,
+				COL_NAME(dc.parent_object_id, dc.parent_column_id) + ' = ' + dc.definition, 0
 			FROM sys.tables t
 			INNER JOIN sys.default_constraints dc ON t.object_id = dc.parent_object_id
 			WHERE t.type = 'U'
@@ -166,9 +192,9 @@ public sealed class SchemaExtractor
 				g => g.GroupBy(c => (c.ConstraintType, c.ConstraintName))
 					.Select(cg =>
 					{
-						string keyColumns = string.Join(", ", cg.OrderBy(c => c.SortOrder).Select(c => c.ColumnOrDefinition));
+						string keyColumns = string.Join(", ", cg.OrderBy(c => c.SortOrder).ThenBy(c => c.ColumnOrDefinition, StringComparer.Ordinal).Select(c => c.ColumnOrDefinition));
 						return new ConstraintSchema(cg.Key.ConstraintType, keyColumns);
-					}).OrderBy(c => c.Keys).ThenBy(c => c.Type).ToList());
+					}).OrderBy(c => c.Keys, StringComparer.Ordinal).ThenBy(c => c.Type, StringComparer.Ordinal).ToList());
 
 		// Build table schemas
 		var tables = new List<TableSchema>(tableInfos.Count);
@@ -182,16 +208,19 @@ public sealed class SchemaExtractor
 			tables.Add(new TableSchema(schemaName, tableName, columns, indexes, constraints, identityColumn));
 		}
 
-		return tables.OrderBy(t => t.SchemaName).ThenBy(t => t.Name).ToList();
+		return tables.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal).ToList();
 	}
 
 	private async Task<List<StoredProcedureSchema>> ExtractStoredProceduresAsync(SqlConnection connection, IReadOnlySet<string> objectNamesToIgnore)
 	{
-		// SQL Server 2016+ (major version 13+) removed the 8000-byte input limit on HASHBYTES.
-		// On older versions, fall back to CHECKSUM which has no size limit but weaker collision resistance.
-		// Collision resistance isn't critical here since this value is mixed into the overall SHA256 hash.
+		// SQL Server 2016+ (major version 13+) removed the 8000-byte input limit on HASHBYTES,
+		// as did all Azure SQL offerings (EngineEdition >= 5) — Azure SQL Database reports major
+		// version 12, so the version number alone would wrongly route it to the fallback.
+		// On older on-prem versions, fall back to CHECKSUM which has no size limit but weaker collision
+		// resistance. That isn't critical here since this value is mixed into the overall SHA256 hash.
 		var majorVersion = int.Parse(connection.ServerVersion.Split('.')[0]);
-		var definitionHashExpr = majorVersion >= 13
+		var engineEdition = await connection.ExecuteScalarAsync<int>("SELECT CAST(SERVERPROPERTY('EngineEdition') AS INT)");
+		var definitionHashExpr = SupportsUnlimitedHashBytes(majorVersion, engineEdition)
 			? "CONVERT(VARCHAR(64), HASHBYTES('SHA2_256', ISNULL(m.definition, '')), 2)"
 			: "CONVERT(VARCHAR(40), CHECKSUM(ISNULL(m.definition, '')))";
 
@@ -250,16 +279,17 @@ public sealed class SchemaExtractor
 				paramsByProc.GetValueOrDefault((proc.SchemaName, proc.ProcName), new List<ParameterSchema>()),
 				proc.DefinitionHash ?? ComputeEmptyDefinitionHash()
 			))
-			.OrderBy(p => p.SchemaName)
-			.ThenBy(p => p.Name)
+			.OrderBy(p => p.SchemaName, StringComparer.Ordinal)
+			.ThenBy(p => p.Name, StringComparer.Ordinal)
 			.ToList();
 
 		return procedures;
 	}
 
-	private async Task<List<UserDefinedTableTypeSchema>> ExtractUserDefinedTableTypesAsync(SqlConnection connection)
+	private async Task<List<UserDefinedTableTypeSchema>> ExtractUserDefinedTableTypesAsync(SqlConnection connection, IReadOnlySet<string> objectNamesToIgnore)
 	{
-		// Get UDTs with schema names
+		// Get UDTs with schema names. Computed columns are joined the same way as table columns so
+		// the formula participates in the hash.
 		const string udtQuery = @"
 			SELECT
 				SCHEMA_NAME(tt.schema_id) AS SchemaName,
@@ -269,23 +299,28 @@ public sealed class SchemaExtractor
 				c.max_length AS MaxLength,
 				c.precision AS Precision,
 				c.scale AS Scale,
-				c.is_nullable AS IsNullable
+				c.is_nullable AS IsNullable,
+				c.is_computed AS IsComputed,
+				cc.definition AS ComputedDefinition,
+				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted
 			FROM sys.table_types tt
 			INNER JOIN sys.columns c ON tt.type_table_object_id = c.object_id
 			INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
+			LEFT JOIN sys.computed_columns cc ON c.object_id = cc.object_id AND c.column_id = cc.column_id
 			ORDER BY SchemaName, tt.name, c.column_id";
 
-		var udtData = await connection.QueryAsync<(string SchemaName, string TableTypeName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable)>(udtQuery);
+		var udtData = await connection.QueryAsync<(string SchemaName, string TableTypeName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted)>(udtQuery);
 
 		var udts = udtData
+			.Where(u => !objectNamesToIgnore.Contains(u.TableTypeName))
 			.GroupBy(u => (u.SchemaName, u.TableTypeName))
 			.Select(g => new UserDefinedTableTypeSchema(
 				g.First().SchemaName,
 				g.Key.TableTypeName,
-				g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable)).OrderBy(c => c.Name).ToList()
+				g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList()
 			))
-			.OrderBy(u => u.SchemaName)
-			.ThenBy(u => u.Name)
+			.OrderBy(u => u.SchemaName, StringComparer.Ordinal)
+			.ThenBy(u => u.Name, StringComparer.Ordinal)
 			.ToList();
 
 		return udts;
@@ -310,4 +345,12 @@ public sealed class SchemaExtractor
 	/// Returns a fallback hash for an empty/null procedure definition, consistent with SQL Server's CHECKSUM('').
 	/// </summary>
 	private static string ComputeEmptyDefinitionHash() => "0";
+
+	/// <summary>
+	/// Determines whether the server supports HASHBYTES on inputs over 8000 bytes.
+	/// True for SQL Server 2016+ (major version 13+) and for all Azure SQL offerings
+	/// (EngineEdition 5 = Azure SQL Database, 8 = Managed Instance, etc.), which support
+	/// it regardless of the major version they report.
+	/// </summary>
+	internal static bool SupportsUnlimitedHashBytes(int majorVersion, int engineEdition) => majorVersion >= 13 || engineEdition >= 5;
 }

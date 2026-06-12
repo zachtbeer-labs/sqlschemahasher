@@ -19,14 +19,24 @@ public sealed record TableSchema(string SchemaName, string Name, List<ColumnSche
 }
 
 /// <summary>
-/// Represents a column's schema definition.
+/// Represents a column's schema definition. For computed columns, IsComputed is true and
+/// ComputedDefinition carries the formula (e.g. "([Price]*[Qty])"); IsPersisted reflects whether
+/// the computed value is physically stored. Both are null/false for ordinary columns.
 /// </summary>
-public sealed record ColumnSchema(string Name, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable);
+public sealed record ColumnSchema(string Name, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed = false, string? ComputedDefinition = null, bool IsPersisted = false);
 
 /// <summary>
-/// Represents an index definition.
+/// Represents an index definition. Keys contains the key columns in key order, with descending
+/// key columns suffixed by " DESC" (ascending is implicit, e.g. "Name, Created DESC").
+/// IncludedColumns contains non-key (INCLUDE) columns sorted by name, or null if there are none.
+/// KeysWithoutDirection contains the key columns without direction suffixes; it is null when no
+/// key column is descending (i.e. when it would be identical to Keys). A column literally named
+/// "Foo DESC" is ambiguous with a descending "Foo" in this representation — the same ambiguity
+/// class as column names containing ", ".
+/// FilterDefinition carries the predicate of a filtered index (e.g. "([IsActive]=(1))"), or null
+/// for an unfiltered index.
 /// </summary>
-public sealed record IndexSchema(string Name, string Description, string? Keys);
+public sealed record IndexSchema(string Name, string Description, string? Keys, string? IncludedColumns = null, string? KeysWithoutDirection = null, string? FilterDefinition = null);
 
 /// <summary>
 /// Represents a constraint definition (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, DEFAULT).

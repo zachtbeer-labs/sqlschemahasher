@@ -5,7 +5,7 @@
 
     <!-- NuGet Package Metadata -->
     <PackageId>zachtbeer.SqlSchemaHasher</PackageId>
-    <Version>1.0.0</Version>
+    <Version>2.0.0</Version>
     <Authors>Zachtbeer Labs B.V.</Authors>
     <Company>Zachtbeer Labs B.V.</Company>
     <Description>Deterministic SHA256 hashing for SQL Server database schemas. Extract and hash table definitions, stored procedures, and user-defined types for schema comparison and change detection.</Description>
@@ -24,6 +24,10 @@
 
   <ItemGroup>
     <None Include="../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SqlSchemaHash.IntegrationTests" />
   </ItemGroup>
 
   <ItemGroup>
