@@ -384,4 +384,158 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
     }
 
     #endregion
+
+    #region Foreign Key Referential Actions
+
+    [TestMethod]
+    public async Task ForeignKey_DifferentDeleteAction_ChangesHash()
+    {
+        // ON DELETE CASCADE vs NO ACTION is a behavioral schema difference held in
+        // sys.foreign_keys.delete_referential_action_desc, not in the FK's column list.
+        var db1Name = await CreateTestDatabaseAsync("FkAction1");
+        var db2Name = await CreateTestDatabaseAsync("FkAction2");
+
+        const string baseSql = @"
+            CREATE TABLE Parent (Id INT NOT NULL CONSTRAINT PK_Parent PRIMARY KEY);
+            CREATE TABLE Child (Id INT NOT NULL CONSTRAINT PK_Child PRIMARY KEY, ParentId INT NULL);";
+
+        await ExecuteSqlAsync(db1Name, baseSql);
+        await ExecuteSqlAsync(db2Name, baseSql);
+
+        await ExecuteSqlAsync(db1Name, "ALTER TABLE Child ADD CONSTRAINT FK_Child_Parent FOREIGN KEY (ParentId) REFERENCES Parent(Id) ON DELETE CASCADE");
+        await ExecuteSqlAsync(db2Name, "ALTER TABLE Child ADD CONSTRAINT FK_Child_Parent FOREIGN KEY (ParentId) REFERENCES Parent(Id) ON DELETE NO ACTION");
+
+        var hash1 = await ExtractAndHashAsync(db1Name);
+        var hash2 = await ExtractAndHashAsync(db2Name);
+
+        hash1.ShouldNotBe(hash2, "A foreign key's ON DELETE action is part of the schema and must change the hash");
+    }
+
+    [TestMethod]
+    public async Task ForeignKey_DifferentUpdateAction_ChangesHash()
+    {
+        var db1Name = await CreateTestDatabaseAsync("FkUpdate1");
+        var db2Name = await CreateTestDatabaseAsync("FkUpdate2");
+
+        const string baseSql = @"
+            CREATE TABLE Parent (Id INT NOT NULL CONSTRAINT PK_Parent PRIMARY KEY);
+            CREATE TABLE Child (Id INT NOT NULL CONSTRAINT PK_Child PRIMARY KEY, ParentId INT NULL);";
+
+        await ExecuteSqlAsync(db1Name, baseSql);
+        await ExecuteSqlAsync(db2Name, baseSql);
+
+        await ExecuteSqlAsync(db1Name, "ALTER TABLE Child ADD CONSTRAINT FK_Child_Parent FOREIGN KEY (ParentId) REFERENCES Parent(Id) ON UPDATE CASCADE");
+        await ExecuteSqlAsync(db2Name, "ALTER TABLE Child ADD CONSTRAINT FK_Child_Parent FOREIGN KEY (ParentId) REFERENCES Parent(Id) ON UPDATE NO ACTION");
+
+        var hash1 = await ExtractAndHashAsync(db1Name);
+        var hash2 = await ExtractAndHashAsync(db2Name);
+
+        hash1.ShouldNotBe(hash2, "A foreign key's ON UPDATE action is part of the schema and must change the hash");
+    }
+
+    #endregion
+
+    #region Column Collation
+
+    [TestMethod]
+    public async Task Column_DifferentCollation_ChangesHash()
+    {
+        // A column's collation (case-insensitive vs case-sensitive) changes comparison/sort
+        // semantics and lives in sys.columns.collation_name; it must be captured and hashed.
+        var db1Name = await CreateTestDatabaseAsync("Collation1");
+        var db2Name = await CreateTestDatabaseAsync("Collation2");
+
+        await ExecuteSqlAsync(db1Name, @"
+            CREATE TABLE People (
+                Id INT NOT NULL CONSTRAINT PK_People PRIMARY KEY,
+                Name NVARCHAR(100) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL
+            )");
+        await ExecuteSqlAsync(db2Name, @"
+            CREATE TABLE People (
+                Id INT NOT NULL CONSTRAINT PK_People PRIMARY KEY,
+                Name NVARCHAR(100) COLLATE SQL_Latin1_General_CP1_CS_AS NOT NULL
+            )");
+
+        var hash1 = await ExtractAndHashAsync(db1Name);
+        var hash2 = await ExtractAndHashAsync(db2Name);
+
+        hash1.ShouldNotBe(hash2, "Changing a string column's collation is a schema difference and must change the hash");
+    }
+
+    [TestMethod]
+    public async Task Column_SameCollation_SameHash()
+    {
+        // Guards against over-sensitivity: identical explicit collations must still compare equal.
+        var db1Name = await CreateTestDatabaseAsync("CollationSame1");
+        var db2Name = await CreateTestDatabaseAsync("CollationSame2");
+
+        const string tableSql = @"
+            CREATE TABLE People (
+                Id INT NOT NULL CONSTRAINT PK_People PRIMARY KEY,
+                Name NVARCHAR(100) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL
+            )";
+        await ExecuteSqlAsync(db1Name, tableSql);
+        await ExecuteSqlAsync(db2Name, tableSql);
+
+        (await ExtractAndHashAsync(db1Name)).ShouldBe(await ExtractAndHashAsync(db2Name), "Identical collations must produce the same hash");
+    }
+
+    [TestMethod]
+    public async Task Column_Collation_IsExtracted_AndNullForNonStringColumns()
+    {
+        var dbName = await CreateTestDatabaseAsync("CollationExtract");
+
+        await ExecuteSqlAsync(dbName, @"
+            CREATE TABLE People (
+                Id INT NOT NULL CONSTRAINT PK_People PRIMARY KEY,
+                Name NVARCHAR(100) COLLATE SQL_Latin1_General_CP1_CS_AS NOT NULL
+            )");
+
+        var columns = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "People").Columns;
+
+        columns.Single(c => c.Name == "Name").Collation.ShouldBe("SQL_Latin1_General_CP1_CS_AS", "A string column must carry its collation");
+        columns.Single(c => c.Name == "Id").Collation.ShouldBeNull("A non-string column has no collation");
+    }
+
+    #endregion
+
+    #region Stored Procedure Parameter Direction
+
+    [TestMethod]
+    public async Task Parameter_OutputVsInput_ChangesHash_EvenWithoutProcedureText()
+    {
+        // @x INT OUTPUT vs @x INT is a contract difference in sys.parameters.is_output. With
+        // procedure text excluded, only the captured parameter metadata can surface it. Bodies are
+        // identical so the difference is attributable solely to the OUTPUT flag.
+        var db1Name = await CreateTestDatabaseAsync("ParamOut1");
+        var db2Name = await CreateTestDatabaseAsync("ParamOut2");
+
+        await ExecuteSqlAsync(db1Name, "CREATE PROCEDURE SetValue @x INT OUTPUT AS BEGIN SET @x = @x END");
+        await ExecuteSqlAsync(db2Name, "CREATE PROCEDURE SetValue @x INT AS BEGIN SET @x = @x END");
+
+        var noText = new SchemaHashOptions { IncludeStoredProcedureText = false };
+
+        (await ExtractAndHashAsync(db1Name, noText)).ShouldNotBe(await ExtractAndHashAsync(db2Name, noText), "An OUTPUT parameter must change the hash even when stored procedure text is excluded");
+    }
+
+    [TestMethod]
+    public async Task Parameter_OutputAndReadonly_AreExtracted()
+    {
+        var dbName = await CreateTestDatabaseAsync("ParamDirMeta");
+
+        await ExecuteSqlAsync(dbName, "CREATE TYPE dbo.IntList AS TABLE (Value INT NOT NULL)");
+        await ExecuteSqlAsync(dbName, "CREATE PROCEDURE Process @items dbo.IntList READONLY, @count INT OUTPUT AS BEGIN SET @count = 0 END");
+
+        var proc = (await ExtractSchemaAsync(dbName)).StoredProcedures.Single(p => p.Name == "Process");
+
+        var items = proc.Parameters.Single(p => p.Name == "items");
+        items.IsReadonly.ShouldBeTrue("A table-valued parameter is READONLY and must be reported as such");
+        items.IsOutput.ShouldBeFalse("A READONLY parameter is not an output parameter");
+
+        var count = proc.Parameters.Single(p => p.Name == "count");
+        count.IsOutput.ShouldBeTrue("An OUTPUT parameter must be reported as output");
+        count.IsReadonly.ShouldBeFalse("A scalar OUTPUT parameter is not readonly");
+    }
+
+    #endregion
 }

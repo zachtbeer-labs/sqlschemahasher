@@ -116,9 +116,9 @@ var normalizedHash = SqlSchemaHash.ComputeHash(schema, new SchemaHashOptions
 
 The hash includes:
 
-- **Tables**: Schema name, table name, columns (name, type, precision, nullability, and — for computed columns — the formula and whether it is `PERSISTED`), indexes (including key sort order, INCLUDE columns, and filtered-index predicates), constraints, identity columns
-- **Stored Procedures**: Schema name, procedure name, parameters, and a hash of the procedure body (detects logic changes)
-- **User-Defined Table Types**: Schema name, type name, columns (including computed column formulas)
+- **Tables**: Schema name, table name, columns (name, type, precision, nullability, string collation, and — for computed columns — the formula and whether it is `PERSISTED`), indexes (including key sort order, INCLUDE columns, and filtered-index predicates), constraints (foreign keys include the referenced table/column and the `ON DELETE`/`ON UPDATE` referential actions), identity columns
+- **Stored Procedures**: Schema name, procedure name, parameters (including `OUTPUT` direction and the `READONLY` flag), and a hash of the procedure body (detects logic changes)
+- **User-Defined Table Types**: Schema name, type name, columns (including string collation and computed column formulas)
 
 ### Excluded Objects
 
@@ -126,6 +126,10 @@ When `IgnoreSysDiagramObjects` is enabled (it is in every preset, including `Def
 - `sysdiagrams` table and related diagram helper procedures (`fn_diagramobjects`, `sp_alterdiagram`, `sp_creatediagram`, `sp_dropdiagram`, `sp_helpdiagramdefinition`, `sp_helpdiagrams`, `sp_renamediagram`)
 
 This composes additively with any names you put in `ObjectNamesToIgnore`. A bare `new SchemaHashOptions()` excludes nothing.
+
+### Not Yet Captured
+
+Extraction currently covers tables, stored procedures (`type = 'P'`), and user-defined table types. The following object types are **not** read, so adding or altering them does not change the hash: views, scalar/table-valued functions, triggers, sequences, and synonyms. Broadening object-type coverage is a planned follow-up.
 
 ## Presets
 

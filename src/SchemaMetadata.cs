@@ -22,8 +22,10 @@ public sealed record TableSchema(string SchemaName, string Name, List<ColumnSche
 /// Represents a column's schema definition. For computed columns, IsComputed is true and
 /// ComputedDefinition carries the formula (e.g. "([Price]*[Qty])"); IsPersisted reflects whether
 /// the computed value is physically stored. Both are null/false for ordinary columns.
+/// Collation carries the column's collation for string columns (e.g. "SQL_Latin1_General_CP1_CI_AS"),
+/// or null for non-string columns that have no collation.
 /// </summary>
-public sealed record ColumnSchema(string Name, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed = false, string? ComputedDefinition = null, bool IsPersisted = false);
+public sealed record ColumnSchema(string Name, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed = false, string? ComputedDefinition = null, bool IsPersisted = false, string? Collation = null);
 
 /// <summary>
 /// Represents an index definition. Keys contains the key columns in key order, with descending
@@ -57,9 +59,10 @@ public sealed record StoredProcedureSchema(string SchemaName, string Name, List<
 }
 
 /// <summary>
-/// Represents a stored procedure or function parameter.
+/// Represents a stored procedure or function parameter. IsOutput is true for OUTPUT parameters;
+/// IsReadonly is true for READONLY parameters (required for table-valued parameters).
 /// </summary>
-public sealed record ParameterSchema(string Name, string Type, int MaxLength, int Precision, int Scale, bool IsNullable);
+public sealed record ParameterSchema(string Name, string Type, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsOutput = false, bool IsReadonly = false);
 
 /// <summary>
 /// Represents a user-defined table type and its columns.

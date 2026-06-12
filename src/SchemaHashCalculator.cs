@@ -116,6 +116,15 @@ public sealed class SchemaHashCalculator
         AppendInt(hasher, column.Scale);
         AppendBool(hasher, column.IsNullable);
 
+        // String columns carry their collation as a trailing block (null for non-string types),
+        // so a collation change (e.g. CI -> CS) is reflected in the hash while leaving the byte
+        // layout of non-string columns — including the golden vector's int column — unchanged.
+        if (!string.IsNullOrEmpty(column.Collation))
+        {
+            AppendString(hasher, "COLLATION:");
+            AppendString(hasher, column.Collation);
+        }
+
         // Computed columns carry a trailing block so they stay distinct from an ordinary column of
         // the same resulting type, and so formula/PERSISTED changes are reflected in the hash.
         if (column.IsComputed)
@@ -199,6 +208,16 @@ public sealed class SchemaHashCalculator
         AppendInt(hasher, param.Precision);
         AppendInt(hasher, param.Scale);
         AppendBool(hasher, param.IsNullable);
+
+        // OUTPUT/READONLY participate as a trailing block so an input-only parameter (the common
+        // case) keeps the original layout; a direction/readonly change is caught even when stored
+        // procedure text is excluded from the hash.
+        if (param.IsOutput || param.IsReadonly)
+        {
+            AppendString(hasher, "DIR:");
+            AppendBool(hasher, param.IsOutput);
+            AppendBool(hasher, param.IsReadonly);
+        }
     }
 
     private void HashUserDefinedTableType(IncrementalHash hasher, UserDefinedTableTypeSchema udt)
@@ -250,8 +269,12 @@ public sealed class SchemaHashCalculator
         if (string.IsNullOrWhiteSpace(lastPart))
             return false;
 
-        // Auto-generated suffixes are hexadecimal with a length that is a multiple of 8 (typically a GUID)
-        return lastPart.Length % 8 == 0 && lastPart.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+        // Auto-generated suffixes are long hex runs — at least 16 chars and a multiple of 8, e.g.
+        // half- or full-GUID suffixes on missing-index 'nci_wi_...' names. Requiring >= 16 avoids
+        // misclassifying ordinary names whose final segment is a short 8-char hex run
+        // (e.g. 'IX_Audit_Record_CAFEBABE'); SQL Server's own PK__/DF__ system names are matched by
+        // SystemGeneratedNameRegex above regardless of suffix length.
+        return lastPart.Length >= 16 && lastPart.Length % 8 == 0 && lastPart.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
     }
 
     private static void AppendString(IncrementalHash hasher, string value)

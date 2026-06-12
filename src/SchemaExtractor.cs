@@ -92,7 +92,8 @@ public sealed class SchemaExtractor
 				c.is_nullable AS IsNullable,
 				c.is_computed AS IsComputed,
 				cc.definition AS ComputedDefinition,
-				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted
+				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted,
+				c.collation_name AS Collation
 			FROM sys.tables t
 			INNER JOIN sys.columns c ON t.object_id = c.object_id
 			INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
@@ -100,12 +101,12 @@ public sealed class SchemaExtractor
 			WHERE t.type = 'U'
 			ORDER BY SchemaName, t.name, c.column_id";
 
-		var allColumns = (await connection.QueryAsync<(string SchemaName, string TableName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted)>(columnsQuery))
+		var allColumns = (await connection.QueryAsync<(string SchemaName, string TableName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted, string? Collation)>(columnsQuery))
 			.Where(c => !objectNamesToIgnore.Contains(c.TableName))
 			.GroupBy(c => (c.SchemaName, c.TableName))
 			.ToDictionary(
 				g => g.Key,
-				g => g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList());
+				g => g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted, c.Collation)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList());
 
 		// Query 3: Get all index columns for all tables (with schema)
 		// Returns one row per index column; column aggregation is done in C# for SQL Server 2012 compatibility.
@@ -165,7 +166,8 @@ public sealed class SchemaExtractor
 			WHERE t.type = 'U'
 			UNION ALL
 			SELECT SCHEMA_NAME(t.schema_id), t.name, 'FOREIGN KEY', fk.name,
-				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) + ' -> ' + SCHEMA_NAME(rt.schema_id) + '.' + rt.name + '.' + COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id),
+				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) + ' -> ' + SCHEMA_NAME(rt.schema_id) + '.' + rt.name + '.' + COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id)
+						+ ' [ON DELETE ' + fk.delete_referential_action_desc COLLATE DATABASE_DEFAULT + ', ON UPDATE ' + fk.update_referential_action_desc COLLATE DATABASE_DEFAULT + ']',
 				fkc.constraint_column_id
 			FROM sys.tables t
 			INNER JOIN sys.foreign_keys fk ON t.object_id = fk.parent_object_id
@@ -248,28 +250,23 @@ public sealed class SchemaExtractor
 				pa.max_length AS MaxLength,
 				pa.precision AS Precision,
 				pa.scale AS Scale,
-				pa.is_nullable AS IsNullable
+				pa.is_nullable AS IsNullable,
+				pa.is_output AS IsOutput,
+				pa.is_readonly AS IsReadonly
 			FROM sys.procedures p
 			INNER JOIN sys.parameters pa ON p.object_id = pa.object_id
 			INNER JOIN sys.types t ON pa.user_type_id = t.user_type_id
 			WHERE p.type = 'P'
 			ORDER BY SchemaName, p.name, pa.parameter_id";
 
-		var procsAndParams = await connection.QueryAsync<(string SchemaName, string ProcName, string ParamName, string TypeName, int MaxLength, int Precision, int Scale, bool IsNullable)>(paramsQuery);
+		var procsAndParams = await connection.QueryAsync<(string SchemaName, string ProcName, string ParamName, string TypeName, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsOutput, bool IsReadonly)>(paramsQuery);
 
 		var paramsByProc = procsAndParams
 			.Where(p => !objectNamesToIgnore.Contains(p.ProcName))
 			.GroupBy(p => (p.SchemaName, p.ProcName))
 			.ToDictionary(
 				g => g.Key,
-				g => g.Select(p => new ParameterSchema(
-					p.ParamName.TrimStart('@'),
-					p.TypeName,
-					p.MaxLength,
-					p.Precision,
-					p.Scale,
-					p.IsNullable
-				)).ToList()
+				g => g.Select(p => new ParameterSchema(p.ParamName.TrimStart('@'), p.TypeName, p.MaxLength, p.Precision, p.Scale, p.IsNullable, p.IsOutput, p.IsReadonly)).ToList()
 			);
 
 		var procedures = allProcs
@@ -302,14 +299,15 @@ public sealed class SchemaExtractor
 				c.is_nullable AS IsNullable,
 				c.is_computed AS IsComputed,
 				cc.definition AS ComputedDefinition,
-				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted
+				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted,
+				c.collation_name AS Collation
 			FROM sys.table_types tt
 			INNER JOIN sys.columns c ON tt.type_table_object_id = c.object_id
 			INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
 			LEFT JOIN sys.computed_columns cc ON c.object_id = cc.object_id AND c.column_id = cc.column_id
 			ORDER BY SchemaName, tt.name, c.column_id";
 
-		var udtData = await connection.QueryAsync<(string SchemaName, string TableTypeName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted)>(udtQuery);
+		var udtData = await connection.QueryAsync<(string SchemaName, string TableTypeName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted, string? Collation)>(udtQuery);
 
 		var udts = udtData
 			.Where(u => !objectNamesToIgnore.Contains(u.TableTypeName))
@@ -317,7 +315,7 @@ public sealed class SchemaExtractor
 			.Select(g => new UserDefinedTableTypeSchema(
 				g.First().SchemaName,
 				g.Key.TableTypeName,
-				g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList()
+				g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted, c.Collation)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList()
 			))
 			.OrderBy(u => u.SchemaName, StringComparer.Ordinal)
 			.ThenBy(u => u.Name, StringComparer.Ordinal)
