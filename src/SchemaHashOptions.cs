@@ -48,7 +48,7 @@ public sealed class SchemaHashOptions
 	/// names entirely, and SSMS diagram objects. Columns, key column sets, included columns,
 	/// uniqueness/primary-key-ness, constraints, identity columns, and stored procedures are still compared.
 	/// </summary>
-	public static SchemaHashOptions Structural => new() { IgnoreSysDiagramObjects = true, IgnoreIndexNames = true, NormalizeClusteringType = true, IgnoreIndexSortOrder = true };
+	public static SchemaHashOptions Structural => new() { IgnoreSysDiagramObjects = true, IgnoreIndexNames = true, NormalizeClusteringType = true, IgnoreIndexSortOrder = true, IgnoreConstraintNames = true };
 
 	/// <summary>
 	/// Object names to exclude from schema extraction (case-insensitive).
@@ -87,6 +87,15 @@ public sealed class SchemaHashOptions
 	/// Default: false. Enabled by <see cref="Structural"/>.
 	/// </summary>
 	public bool IgnoreIndexNames { get; set; } = false;
+
+	/// <summary>
+	/// When true, constraint names (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, DEFAULT) are excluded
+	/// from the hash — only the constraint definition (type, keys/expression, enforcement state)
+	/// matters. When false (default), renaming a constraint changes the hash, mirroring the exact
+	/// index-name comparison of <see cref="IgnoreIndexNames"/>.
+	/// Default: false (names compared). Enabled by <see cref="Structural"/>.
+	/// </summary>
+	public bool IgnoreConstraintNames { get; set; } = false;
 
 	/// <summary>
 	/// When true, normalizes clustered/nonclustered index types to a common value.

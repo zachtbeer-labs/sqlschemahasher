@@ -64,13 +64,16 @@ public sealed class SchemaExtractor
 			SELECT
 				SCHEMA_NAME(t.schema_id) AS SchemaName,
 				t.name AS TableName,
-				idc.name AS IdentityColumn
+				idc.name AS IdentityColumn,
+				CONVERT(NVARCHAR(64), idc.seed_value) AS IdentitySeed,
+				CONVERT(NVARCHAR(64), idc.increment_value) AS IdentityIncrement,
+				CAST(ISNULL(idc.is_not_for_replication, 0) AS bit) AS IdentityNotForReplication
 			FROM sys.tables t
 			LEFT JOIN sys.identity_columns idc ON idc.object_id = t.object_id
 			WHERE t.type = 'U'
 			ORDER BY SchemaName, t.name";
 
-		var tableInfos = (await connection.QueryAsync<(string SchemaName, string TableName, string? IdentityColumn)>(tablesQuery))
+		var tableInfos = (await connection.QueryAsync<(string SchemaName, string TableName, string? IdentityColumn, string? IdentitySeed, string? IdentityIncrement, bool IdentityNotForReplication)>(tablesQuery))
 			.Where(t => !objectNamesToIgnore.Contains(t.TableName))
 			.ToList();
 
@@ -85,7 +88,7 @@ public sealed class SchemaExtractor
 				SCHEMA_NAME(t.schema_id) AS SchemaName,
 				t.name AS TableName,
 				c.name AS ColumnName,
-				ty.name AS DataType,
+				CASE WHEN ty.is_user_defined = 1 THEN SCHEMA_NAME(ty.schema_id) + '.' + ty.name ELSE ty.name END AS DataType,
 				c.max_length AS MaxLength,
 				c.precision AS Precision,
 				c.scale AS Scale,
@@ -93,7 +96,10 @@ public sealed class SchemaExtractor
 				c.is_computed AS IsComputed,
 				cc.definition AS ComputedDefinition,
 				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted,
-				c.collation_name AS Collation
+				c.collation_name AS Collation,
+				c.column_id AS Ordinal,
+				c.is_sparse AS IsSparse,
+				c.is_rowguidcol AS IsRowGuidCol
 			FROM sys.tables t
 			INNER JOIN sys.columns c ON t.object_id = c.object_id
 			INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
@@ -101,12 +107,12 @@ public sealed class SchemaExtractor
 			WHERE t.type = 'U'
 			ORDER BY SchemaName, t.name, c.column_id";
 
-		var allColumns = (await connection.QueryAsync<(string SchemaName, string TableName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted, string? Collation)>(columnsQuery))
+		var allColumns = (await connection.QueryAsync<(string SchemaName, string TableName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted, string? Collation, int Ordinal, bool IsSparse, bool IsRowGuidCol)>(columnsQuery))
 			.Where(c => !objectNamesToIgnore.Contains(c.TableName))
 			.GroupBy(c => (c.SchemaName, c.TableName))
 			.ToDictionary(
 				g => g.Key,
-				g => g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted, c.Collation)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList());
+				g => g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted, c.Collation, c.Ordinal, c.IsSparse, c.IsRowGuidCol)).OrderBy(c => c.Ordinal).ToList());
 
 		// Query 3: Get all index columns for all tables (with schema)
 		// Returns one row per index column; column aggregation is done in C# for SQL Server 2012 compatibility.
@@ -158,7 +164,8 @@ public sealed class SchemaExtractor
 		const string constraintsQuery = @"
 			SELECT SCHEMA_NAME(t.schema_id) AS SchemaName, t.name AS TableName,
 				CASE WHEN kc.type = 'PK' THEN 'PRIMARY KEY' ELSE 'UNIQUE' END AS ConstraintType,
-				kc.name AS ConstraintName, c.name AS ColumnOrDefinition, ic.key_ordinal AS SortOrder
+				kc.name AS ConstraintName, c.name AS ColumnOrDefinition, ic.key_ordinal AS SortOrder,
+				CAST(0 AS bit) AS IsDisabled, CAST(0 AS bit) AS IsNotTrusted
 			FROM sys.tables t
 			INNER JOIN sys.key_constraints kc ON t.object_id = kc.parent_object_id
 			INNER JOIN sys.index_columns ic ON kc.parent_object_id = ic.object_id AND kc.unique_index_id = ic.index_id
@@ -168,7 +175,7 @@ public sealed class SchemaExtractor
 			SELECT SCHEMA_NAME(t.schema_id), t.name, 'FOREIGN KEY', fk.name,
 				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) + ' -> ' + SCHEMA_NAME(rt.schema_id) + '.' + rt.name + '.' + COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id)
 						+ ' [ON DELETE ' + fk.delete_referential_action_desc COLLATE DATABASE_DEFAULT + ', ON UPDATE ' + fk.update_referential_action_desc COLLATE DATABASE_DEFAULT + ']',
-				fkc.constraint_column_id
+				fkc.constraint_column_id, fk.is_disabled, fk.is_not_trusted
 			FROM sys.tables t
 			INNER JOIN sys.foreign_keys fk ON t.object_id = fk.parent_object_id
 			INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
@@ -176,38 +183,40 @@ public sealed class SchemaExtractor
 			WHERE t.type = 'U'
 			UNION ALL
 			SELECT SCHEMA_NAME(t.schema_id), t.name, 'DEFAULT', dc.name,
-				COL_NAME(dc.parent_object_id, dc.parent_column_id) + ' = ' + dc.definition, 0
+				COL_NAME(dc.parent_object_id, dc.parent_column_id) + ' = ' + dc.definition, 0,
+				CAST(0 AS bit), CAST(0 AS bit)
 			FROM sys.tables t
 			INNER JOIN sys.default_constraints dc ON t.object_id = dc.parent_object_id
 			WHERE t.type = 'U'
 			UNION ALL
-			SELECT SCHEMA_NAME(t.schema_id), t.name, 'CHECK', cc.name, cc.definition, 0
+			SELECT SCHEMA_NAME(t.schema_id), t.name, 'CHECK', cc.name, cc.definition, 0,
+				cc.is_disabled, cc.is_not_trusted
 			FROM sys.tables t
 			INNER JOIN sys.check_constraints cc ON t.object_id = cc.parent_object_id
 			WHERE t.type = 'U'";
 
-		var allConstraints = (await connection.QueryAsync<(string SchemaName, string TableName, string ConstraintType, string ConstraintName, string? ColumnOrDefinition, int SortOrder)>(constraintsQuery))
+		var allConstraints = (await connection.QueryAsync<(string SchemaName, string TableName, string ConstraintType, string ConstraintName, string? ColumnOrDefinition, int SortOrder, bool IsDisabled, bool IsNotTrusted)>(constraintsQuery))
 			.Where(c => !objectNamesToIgnore.Contains(c.TableName))
 			.GroupBy(c => (c.SchemaName, c.TableName))
 			.ToDictionary(
 				g => g.Key,
-				g => g.GroupBy(c => (c.ConstraintType, c.ConstraintName))
+				g => g.GroupBy(c => (c.ConstraintType, c.ConstraintName, c.IsDisabled, c.IsNotTrusted))
 					.Select(cg =>
 					{
 						string keyColumns = string.Join(", ", cg.OrderBy(c => c.SortOrder).ThenBy(c => c.ColumnOrDefinition, StringComparer.Ordinal).Select(c => c.ColumnOrDefinition));
-						return new ConstraintSchema(cg.Key.ConstraintType, keyColumns);
-					}).OrderBy(c => c.Keys, StringComparer.Ordinal).ThenBy(c => c.Type, StringComparer.Ordinal).ToList());
+						return new ConstraintSchema(cg.Key.ConstraintType, keyColumns, cg.Key.ConstraintName, cg.Key.IsDisabled, cg.Key.IsNotTrusted);
+					}).OrderBy(c => c.Keys, StringComparer.Ordinal).ThenBy(c => c.Type, StringComparer.Ordinal).ThenBy(c => c.Name, StringComparer.Ordinal).ToList());
 
 		// Build table schemas
 		var tables = new List<TableSchema>(tableInfos.Count);
-		foreach (var (schemaName, tableName, identityColumn) in tableInfos)
+		foreach (var (schemaName, tableName, identityColumn, identitySeed, identityIncrement, identityNotForReplication) in tableInfos)
 		{
 			var key = (schemaName, tableName);
 			var columns = allColumns.GetValueOrDefault(key, new List<ColumnSchema>());
 			var indexes = allIndexes.GetValueOrDefault(key, new List<IndexSchema>());
 			var constraints = allConstraints.GetValueOrDefault(key, new List<ConstraintSchema>());
 
-			tables.Add(new TableSchema(schemaName, tableName, columns, indexes, constraints, identityColumn));
+			tables.Add(new TableSchema(schemaName, tableName, columns, indexes, constraints, identityColumn, identitySeed, identityIncrement, identityNotForReplication));
 		}
 
 		return tables.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal).ToList();
@@ -226,17 +235,23 @@ public sealed class SchemaExtractor
 			? "CONVERT(VARCHAR(64), HASHBYTES('SHA2_256', ISNULL(m.definition, '')), 2)"
 			: "CONVERT(VARCHAR(40), CHECKSUM(ISNULL(m.definition, '')))";
 
+		// A WITH ENCRYPTION procedure has a row in sys.sql_modules but a NULL definition, so its body
+		// is unavailable to hash. IsEncrypted lets the calculator give it a distinct sentinel instead
+		// of collapsing to the hash of the empty string (which would also collide with an empty body).
+		// Two different encrypted procedures with the same signature still collide — that is inherent,
+		// since the server exposes nothing that reflects an encrypted body.
 		string allProcsQuery = $@"
 			SELECT
 				SCHEMA_NAME(p.schema_id) AS SchemaName,
 				p.name AS ProcName,
-				{definitionHashExpr} AS DefinitionHash
+				{definitionHashExpr} AS DefinitionHash,
+				CAST(CASE WHEN m.object_id IS NOT NULL AND m.definition IS NULL THEN 1 ELSE 0 END AS bit) AS IsEncrypted
 			FROM sys.procedures p
 			LEFT JOIN sys.sql_modules m ON p.object_id = m.object_id
 			WHERE p.type = 'P'
 			ORDER BY SchemaName, p.name";
 
-		var allProcs = (await connection.QueryAsync<(string SchemaName, string ProcName, string DefinitionHash)>(allProcsQuery))
+		var allProcs = (await connection.QueryAsync<(string SchemaName, string ProcName, string? DefinitionHash, bool IsEncrypted)>(allProcsQuery))
 			.Where(p => !objectNamesToIgnore.Contains(p.ProcName))
 			.ToList();
 
@@ -246,7 +261,7 @@ public sealed class SchemaExtractor
 				SCHEMA_NAME(p.schema_id) AS SchemaName,
 				p.name AS ProcName,
 				pa.name AS ParamName,
-				t.name AS TypeName,
+				CASE WHEN t.is_user_defined = 1 THEN SCHEMA_NAME(t.schema_id) + '.' + t.name ELSE t.name END AS TypeName,
 				pa.max_length AS MaxLength,
 				pa.precision AS Precision,
 				pa.scale AS Scale,
@@ -274,7 +289,7 @@ public sealed class SchemaExtractor
 				proc.SchemaName,
 				proc.ProcName,
 				paramsByProc.GetValueOrDefault((proc.SchemaName, proc.ProcName), new List<ParameterSchema>()),
-				proc.DefinitionHash ?? ComputeEmptyDefinitionHash()
+				proc.IsEncrypted ? EncryptedDefinitionSentinel : (proc.DefinitionHash ?? ComputeEmptyDefinitionHash())
 			))
 			.OrderBy(p => p.SchemaName, StringComparer.Ordinal)
 			.ThenBy(p => p.Name, StringComparer.Ordinal)
@@ -292,7 +307,7 @@ public sealed class SchemaExtractor
 				SCHEMA_NAME(tt.schema_id) AS SchemaName,
 				tt.name AS TableTypeName,
 				c.name AS ColumnName,
-				t.name AS DataType,
+				CASE WHEN t.is_user_defined = 1 THEN SCHEMA_NAME(t.schema_id) + '.' + t.name ELSE t.name END AS DataType,
 				c.max_length AS MaxLength,
 				c.precision AS Precision,
 				c.scale AS Scale,
@@ -300,14 +315,17 @@ public sealed class SchemaExtractor
 				c.is_computed AS IsComputed,
 				cc.definition AS ComputedDefinition,
 				CAST(ISNULL(cc.is_persisted, 0) AS bit) AS IsPersisted,
-				c.collation_name AS Collation
+				c.collation_name AS Collation,
+				c.column_id AS Ordinal,
+				c.is_sparse AS IsSparse,
+				c.is_rowguidcol AS IsRowGuidCol
 			FROM sys.table_types tt
 			INNER JOIN sys.columns c ON tt.type_table_object_id = c.object_id
 			INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
 			LEFT JOIN sys.computed_columns cc ON c.object_id = cc.object_id AND c.column_id = cc.column_id
 			ORDER BY SchemaName, tt.name, c.column_id";
 
-		var udtData = await connection.QueryAsync<(string SchemaName, string TableTypeName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted, string? Collation)>(udtQuery);
+		var udtData = await connection.QueryAsync<(string SchemaName, string TableTypeName, string ColumnName, string DataType, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsComputed, string? ComputedDefinition, bool IsPersisted, string? Collation, int Ordinal, bool IsSparse, bool IsRowGuidCol)>(udtQuery);
 
 		var udts = udtData
 			.Where(u => !objectNamesToIgnore.Contains(u.TableTypeName))
@@ -315,7 +333,7 @@ public sealed class SchemaExtractor
 			.Select(g => new UserDefinedTableTypeSchema(
 				g.First().SchemaName,
 				g.Key.TableTypeName,
-				g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted, c.Collation)).OrderBy(c => c.Name, StringComparer.Ordinal).ToList()
+				g.Select(c => new ColumnSchema(c.ColumnName, c.DataType, c.MaxLength, c.Precision, c.Scale, c.IsNullable, c.IsComputed, c.ComputedDefinition, c.IsPersisted, c.Collation, c.Ordinal, c.IsSparse, c.IsRowGuidCol)).OrderBy(c => c.Ordinal).ToList()
 			))
 			.OrderBy(u => u.SchemaName, StringComparer.Ordinal)
 			.ThenBy(u => u.Name, StringComparer.Ordinal)
@@ -343,6 +361,12 @@ public sealed class SchemaExtractor
 	/// Returns a fallback hash for an empty/null procedure definition, consistent with SQL Server's CHECKSUM('').
 	/// </summary>
 	private static string ComputeEmptyDefinitionHash() => "0";
+
+	/// <summary>
+	/// Distinct sentinel used as the definition hash of a WITH ENCRYPTION procedure, whose body is
+	/// unavailable. Keeps encrypted procedures from colliding with an ordinary empty-body procedure.
+	/// </summary>
+	private const string EncryptedDefinitionSentinel = "<encrypted>";
 
 	/// <summary>
 	/// Determines whether the server supports HASHBYTES on inputs over 8000 bytes.
