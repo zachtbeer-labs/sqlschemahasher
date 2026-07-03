@@ -2,7 +2,11 @@
 
 Findings from a hash-bug-hunter audit of `SchemaExtractor`, `SchemaMetadata`, `SchemaHashCalculator`, and `SchemaHashOptions`. Ranked most-severe first. "False negative" = two schemas that should hash differently hash the same (silent collision). "False positive" = the same schema can hash differently across runs/environments (spurious diff).
 
-## 1. Column order is discarded (false negative)
+**Resolution status:** #1, #2, #3, #4, #6, #7, #8 are fixed and covered by `KnownBugFixTests`. #5 is left as-is by design (see below). Fixing these changes v2 hash output for affected schemas; this is expected — v2 has never been pinned to a stable wire format and extraction-fidelity fixes apply unconditionally.
+
+## 1. Column order is discarded (false negative) — FIXED
+
+`ColumnSchema` now carries `Ordinal` (`sys.columns.column_id`); columns are ordered by ordinal in both extractor and calculator, so a column-order swap changes the hash. The ordinal *number* is not hashed (only the order), so an unrelated column drop that leaves a `column_id` gap does not spuriously change the hash. Applies to both ordinary tables and UDTTs.
 
 **Location:** `SchemaExtractor.cs:109,318` (extraction sorts columns `OrderBy(c => c.Name)`); `SchemaHashCalculator.cs:83,230` (hasher re-sorts by name again). `column_id` is never captured.
 
@@ -19,7 +23,10 @@ This matters most for UDTTs/TVPs, where parameters are marshaled **positionally*
 
 **Confidence:** High for the collision. Whether ordinary (non-UDTT) table column order should also be preserved is a scope question — see bottom.
 
-## 2. Identity seed and increment never captured (false negative)
+## 2. Identity seed and increment never captured (false negative) — FIXED
+
+`TableSchema` now carries `IdentitySeed`, `IdentityIncrement`, and `IdentityNotForReplication`, hashed as a trailing block within the identity block so non-identity tables are unaffected.
+
 
 **Location:** `SchemaExtractor.cs:63-71` selects only `idc.name AS IdentityColumn` from `sys.identity_columns`; `SchemaMetadata.cs:13` stores only the column name.
 
@@ -34,7 +41,10 @@ Same hash. `sys.identity_columns` also exposes `is_not_for_replication`, also un
 
 **Confidence:** High.
 
-## 3. Disabled / untrusted CHECK and FOREIGN KEY constraints are indistinguishable (false negative)
+## 3. Disabled / untrusted CHECK and FOREIGN KEY constraints are indistinguishable (false negative) — FIXED
+
+`ConstraintSchema` now carries `IsDisabled` and `IsNotTrusted` (from `sys.foreign_keys` / `sys.check_constraints`), hashed as a trailing `STATE:` block only when set, so an enforced+trusted constraint keeps its original layout.
+
 
 **Location:** `SchemaExtractor.cs:167-187` — FK and CHECK branches select name/definition/actions but never `is_disabled` or `is_not_trusted`. `ConstraintSchema` (`SchemaMetadata.cs:46`) has no field for them.
 
@@ -50,7 +60,10 @@ Same hash, despite the second having **no enforced data-integrity guarantee** an
 
 **Confidence:** High.
 
-## 4. Constraint names are unconditionally dropped, with no option to preserve them
+## 4. Constraint names are unconditionally dropped, with no option to preserve them — FIXED
+
+`ConstraintSchema` now carries `Name`, hashed unless the new `IgnoreConstraintNames` option is set (default: compared, mirroring exact index-name comparison). The `Structural` preset enables `IgnoreConstraintNames` alongside `IgnoreIndexNames`. A user-named vs. system-named constraint now differs by name automatically.
+
 
 **Location:** `SchemaExtractor.cs:194-199` builds `ConstraintSchema` from only `(Type, Keys)`; the constraint name (selected at `:161`/`:168`/`:178`/`:184`) is used only for grouping, then discarded. `SchemaHashCalculator.cs:175-180` hashes only type + keys.
 
@@ -58,7 +71,10 @@ Renaming `CK_Age_Positive` → `CK_ValidAge` (same expression) produces no hash 
 
 **Confidence:** High that names are dropped; medium on whether this is a bug vs. intentional — needs an explicit ruling.
 
-## 5. SQL-Server-rendered definition text is a cross-version spurious-diff risk (false positive)
+## 5. SQL-Server-rendered definition text is a cross-version spurious-diff risk (false positive) — DOCUMENTED (won't fix)
+
+Intentionally left as-is. Normalizing catalog-rendered expression text (parenthesization, built-in casing, literal formatting) is inherently incomplete and risks introducing *false negatives* — masking a real semantic difference — which is worse than the spurious-diff it would prevent. Definition text (computed columns, defaults, check/filter predicates) is still hashed verbatim. Consumers comparing across SQL Server major versions should be aware that these expressions may re-render and produce a spurious diff; use `Structural`/name-ignoring options where possible, or compare within a single engine version.
+
 
 **Location:** Definition strings pulled straight from catalog views and hashed verbatim: computed column `cc.definition` (`SchemaExtractor.cs:94`), default `dc.definition` (`:179`), check `cc.definition` (`:184`), index `filter_definition` (`:125`).
 
@@ -66,7 +82,10 @@ SQL Server re-renders these expressions itself (parenthesization, built-in casin
 
 **Confidence:** Medium — the mechanism is real and documented SQL Server behavior; not verified against two live instances with a specific rendering delta.
 
-## 6. Encrypted stored procedures all collapse to the same definition hash (false negative, edge)
+## 6. Encrypted stored procedures all collapse to the same definition hash (false negative, edge) — FIXED (partial, inherent limit)
+
+Encrypted procedures (`m.definition IS NULL` while the module row exists) now hash to a distinct `<encrypted>` sentinel rather than the empty-string fallback, so they no longer collide with an empty-body procedure. Two *different* encrypted procedures with the same name+signature still collide, and a change to an encrypted body is still invisible — this is inherent, since the server exposes nothing that reflects an encrypted body.
+
 
 **Location:** `SchemaExtractor.cs:226-227` — `HASHBYTES('SHA2_256', ISNULL(m.definition, ''))`. For `WITH ENCRYPTION` procedures, `sys.sql_modules.definition` is `NULL`, so `ISNULL` yields `''`, and every encrypted proc hashes to the hash of the empty string.
 
@@ -74,7 +93,10 @@ Two different encrypted procedures (or an encrypted proc whose body changed) wit
 
 **Confidence:** High on the mechanism; low real-world prevalence.
 
-## 7. Column storage/semantic flags not captured: `is_sparse`, `is_rowguidcol` (false negative, lower severity)
+## 7. Column storage/semantic flags not captured: `is_sparse`, `is_rowguidcol` (false negative, lower severity) — FIXED
+
+`ColumnSchema` now carries `IsSparse` and `IsRowGuidCol`, hashed as a trailing `STORAGE:` block only when either is set so ordinary columns keep their original layout.
+
 
 **Location:** columns query `SchemaExtractor.cs:83-102`; `ColumnSchema` (`SchemaMetadata.cs:28`) reads nullability/computed/collation but not sparse/rowguidcol flags.
 
@@ -82,7 +104,10 @@ A `SPARSE` column vs. a non-sparse column of the same type collide; a `ROWGUIDCO
 
 **Confidence:** High that the fields exist and aren't read; medium on how much consumers care.
 
-## 8. Data type / parameter type schema-qualification not captured (false negative, edge)
+## 8. Data type / parameter type schema-qualification not captured (false negative, edge) — FIXED (qualification); base-type still open
+
+User-defined column and parameter types are now schema-qualified (`dbo.IntList` vs. `staging.IntList`) via `CASE WHEN ty.is_user_defined = 1 THEN SCHEMA_NAME(ty.schema_id) + '.' + ty.name ELSE ty.name END`; built-in types remain bare names (e.g. `int`), so existing hashes for built-in-typed columns are unchanged. The secondary point — an alias scalar type's underlying base type (`CREATE TYPE ... FROM DECIMAL(9,2)`) not being captured as an object — remains open (alias types are not extracted as first-class objects); changing an alias's base type still does not change the hash unless a column's captured precision/scale changes with it.
+
 
 **Location:** `SchemaExtractor.cs:99` (`ty.name` only for columns), `:258` (`t.name` only for parameter types) — no `SCHEMA_NAME(ty.schema_id)`.
 
@@ -94,8 +119,8 @@ Two alias/CLR/table types named `IntList` in different schemas (`dbo.IntList` vs
 
 ## Scope-boundary questions (confirm intentional vs. bug)
 
-1. **Table (non-UDTT) column order** — deliberately normalized away, or should ordinal be preserved? (For UDTTs, this is arguably a real bug — see #1.)
-2. **Constraint names** — intentionally never hashed (#4)? Indexes get configurable name handling; constraints get none.
+1. **Table (non-UDTT) column order** — RESOLVED: ordinal is now preserved for both tables and UDTTs (see #1). Column order is a real, hashable difference.
+2. **Constraint names** — RESOLVED: now hashed by default and configurable via `IgnoreConstraintNames` (see #4), consistent with index name handling.
 3. **Views, triggers, sequences, scalar/table-valued functions, synonyms** — none are extracted. `ExtractStoredProceduresAsync` filters `p.type = 'P'` only, so functions are entirely unhashed. Confirm this is an intentional scope exclusion.
 4. **Temporal tables, memory-optimized tables, partitioning, filegroup/data-space placement, index `fill_factor`/`ignore_dup_key`/`is_padded`/`is_disabled`, `is_not_for_replication` on FKs** — presumably out of scope; confirm.
 5. **Cross-collation environment comparison** — every string column emits its explicit `collation_name`, so two databases identical except for server default collation will diff on every string column (sibling issue to #5 above). Confirm this sensitivity is desired rather than noise.
