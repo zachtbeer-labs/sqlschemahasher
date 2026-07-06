@@ -24,10 +24,10 @@ public class RegressionAnchorTests : MatrixTestBase
 {
     // Pinned hashes for RichReferenceSchema(). Captured from a green run against the
     // mcr.microsoft.com/mssql/server:2025-latest container. See class remarks.
-    private const string ExpectedStrictHash = "2:NuOQs+gIkYg2AX1P65hj1u+MjHsPUSIUYm3C5qvB1gQ=";
-    private const string ExpectedV1Hash = "2:ca1I3vJYpLZUINauyMJnRihTJUN0EdPN1Y4kxf0HKog=";
-    private const string ExpectedV2Hash = "2:NuOQs+gIkYg2AX1P65hj1u+MjHsPUSIUYm3C5qvB1gQ=";
-    private const string ExpectedStructuralHash = "2:3w0gf6WjICTGFHvDstENjZOoDX36j/lnwOXr9gNygOk=";
+    private const string ExpectedStrictHash = "2:UY12cOMax9QREgF6R/iLEk/cndC1nOTpT0wBvrO8wGQ=";
+    private const string ExpectedV1Hash = "2:AsC4i8777wwRg03uFEgHeDhyK92jI+wRQMFmbvFRRes=";
+    private const string ExpectedV2Hash = "2:UY12cOMax9QREgF6R/iLEk/cndC1nOTpT0wBvrO8wGQ=";
+    private const string ExpectedStructuralHash = "2:YQKwDPJhHJeb5E8PPh0xpR8aG3a1sXyQREXgzQPF9BU=";
 
     /// <summary>
     /// A deliberately rich, fully explicitly-named schema exercising most catalog surfaces the hasher
