@@ -54,10 +54,57 @@ public class PresetAndNormalizationTests : IntegrationTestBase
         await ExecuteSqlAsync(db1Name, "CREATE INDEX IX_Assets_Created ON Assets(Created DESC)");
         await ExecuteSqlAsync(db2Name, "CREATE INDEX IX_Assets_Created ON Assets(Created ASC)");
 
-        var ignoreOptions = new SchemaHashOptions { IgnoreIndexSortOrder = true };
-        (await ExtractAndHashAsync(db1Name, ignoreOptions)).ShouldBe(await ExtractAndHashAsync(db2Name, ignoreOptions), "IgnoreIndexSortOrder must make ASC and DESC keys compare equal");
+        var ignoreOptions = new SchemaHashOptions { Indexes = IndexNormalization.IgnoreSortOrder };
+        (await ExtractAndHashAsync(db1Name, ignoreOptions)).ShouldBe(await ExtractAndHashAsync(db2Name, ignoreOptions), "IndexNormalization.IgnoreSortOrder must make ASC and DESC keys compare equal");
         (await ExtractAndHashAsync(db1Name, SchemaHashOptions.V1)).ShouldBe(await ExtractAndHashAsync(db2Name, SchemaHashOptions.V1), "The V1 preset never compared sort order");
         (await ExtractAndHashAsync(db1Name, SchemaHashOptions.Structural)).ShouldBe(await ExtractAndHashAsync(db2Name, SchemaHashOptions.Structural), "The Structural preset ignores index key sort order");
+    }
+
+    [TestMethod]
+    public async Task ColumnOrder_Swapped_SameHash_UnderIgnoreColumnOrder()
+    {
+        var db1Name = await CreateTestDatabaseAsync("ColOrderIgnore1");
+        var db2Name = await CreateTestDatabaseAsync("ColOrderIgnore2");
+
+        await ExecuteSqlAsync(db1Name, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Alpha INT NOT NULL, Beta NVARCHAR(20) NULL)");
+        await ExecuteSqlAsync(db2Name, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Beta NVARCHAR(20) NULL, Alpha INT NOT NULL)");
+
+        // Default: order is significant.
+        (await ExtractAndHashAsync(db1Name)).ShouldNotBe(await ExtractAndHashAsync(db2Name), "Column order participates by default");
+
+        var ignoreOptions = new SchemaHashOptions { Tables = TableNormalization.IgnoreColumnOrder };
+        (await ExtractAndHashAsync(db1Name, ignoreOptions)).ShouldBe(await ExtractAndHashAsync(db2Name, ignoreOptions), "IgnoreColumnOrder must make the same columns in a different order compare equal");
+        (await ExtractAndHashAsync(db1Name, SchemaHashOptions.Structural)).ShouldBe(await ExtractAndHashAsync(db2Name, SchemaHashOptions.Structural), "The Structural preset ignores column order");
+    }
+
+    [TestMethod]
+    public async Task ColumnOrder_ChangedColumn_StillChangesHash_UnderIgnoreColumnOrder()
+    {
+        // Ignoring order must not collapse a genuine column difference: only position is relaxed.
+        var db1Name = await CreateTestDatabaseAsync("ColOrderReal1");
+        var db2Name = await CreateTestDatabaseAsync("ColOrderReal2");
+
+        await ExecuteSqlAsync(db1Name, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Alpha INT NOT NULL)");
+        await ExecuteSqlAsync(db2Name, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Alpha BIGINT NOT NULL)");
+
+        var ignoreOptions = new SchemaHashOptions { Tables = TableNormalization.IgnoreColumnOrder };
+        (await ExtractAndHashAsync(db1Name, ignoreOptions)).ShouldNotBe(await ExtractAndHashAsync(db2Name, ignoreOptions), "IgnoreColumnOrder relaxes position only — a changed column type must still change the hash");
+    }
+
+    [TestMethod]
+    public async Task ColumnOrder_TableType_Swapped_ChangesHash_EvenUnderIgnoreColumnOrder()
+    {
+        // A TVP marshals positionally, so column order is part of its wire contract; IgnoreColumnOrder
+        // (and the Structural preset) apply to tables only and must NOT relax table-type column order.
+        var db1Name = await CreateTestDatabaseAsync("UdtColOrderIgnore1");
+        var db2Name = await CreateTestDatabaseAsync("UdtColOrderIgnore2");
+
+        await ExecuteSqlAsync(db1Name, "CREATE TYPE dbo.OrderLine AS TABLE (Sku NVARCHAR(20) NOT NULL, Qty INT NOT NULL)");
+        await ExecuteSqlAsync(db2Name, "CREATE TYPE dbo.OrderLine AS TABLE (Qty INT NOT NULL, Sku NVARCHAR(20) NOT NULL)");
+
+        var ignoreOptions = new SchemaHashOptions { Tables = TableNormalization.IgnoreColumnOrder };
+        (await ExtractAndHashAsync(db1Name, ignoreOptions)).ShouldNotBe(await ExtractAndHashAsync(db2Name, ignoreOptions), "IgnoreColumnOrder must not relax table-type column order (TVP positional marshalling)");
+        (await ExtractAndHashAsync(db1Name, SchemaHashOptions.Structural)).ShouldNotBe(await ExtractAndHashAsync(db2Name, SchemaHashOptions.Structural), "Structural must not relax table-type column order either");
     }
 
     [TestMethod]
@@ -77,8 +124,9 @@ public class PresetAndNormalizationTests : IntegrationTestBase
         var schema = await ExtractSchemaAsync(dbName);
 
         var index = schema.Tables.Single(t => t.Name == "Assets").Indexes.Single(i => i.Name == "IX_Assets_Created");
-        index.Keys.ShouldBe("Created DESC", "Descending key columns must carry a DESC suffix in Keys");
-        index.KeysWithoutDirection.ShouldBe("Created", "KeysWithoutDirection must hold the direction-free key list when a key is descending");
+        index.KeyColumns.Count.ShouldBe(1, "The index has a single key column");
+        index.KeyColumns[0].Name.ShouldBe("Created", "The key column name must be captured");
+        index.KeyColumns[0].IsDescendingKey.ShouldBeTrue("A descending key column must be flagged as descending");
 
         var hashWithDirection = zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema, SchemaHashOptions.V2);
         var hashIgnoringDirection = zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema, SchemaHashOptions.V1);
@@ -149,10 +197,11 @@ public class PresetAndNormalizationTests : IntegrationTestBase
         await ExecuteSqlAsync(db2Name, tableSql);
 
         var exactOptions = new SchemaHashOptions();
-        var normalizedOptions = new SchemaHashOptions { NormalizeAutoGeneratedIndexNames = true };
+        // A PK surfaces both as an index name and a key-constraint name, so normalize both domains.
+        var normalizedOptions = new SchemaHashOptions { Indexes = IndexNormalization.NormalizeAutoGeneratedNames, Constraints = ConstraintNormalization.NormalizeAutoGeneratedNames };
 
         (await ExtractAndHashAsync(db1Name, exactOptions)).ShouldNotBe(await ExtractAndHashAsync(db2Name, exactOptions), "System-generated PK names with different hex suffixes must differ under exact comparison");
-        (await ExtractAndHashAsync(db1Name, normalizedOptions)).ShouldBe(await ExtractAndHashAsync(db2Name, normalizedOptions), "NormalizeAutoGeneratedIndexNames must neutralize system-generated PK name suffixes");
+        (await ExtractAndHashAsync(db1Name, normalizedOptions)).ShouldBe(await ExtractAndHashAsync(db2Name, normalizedOptions), "NormalizeAutoGeneratedNames must neutralize system-generated PK name suffixes");
     }
 
     [TestMethod]
@@ -318,18 +367,69 @@ public class PresetAndNormalizationTests : IntegrationTestBase
         var v2 = SchemaHashOptions.V2;
 
         defaults.IgnoreSysDiagramObjects.ShouldBe(v2.IgnoreSysDiagramObjects);
-        defaults.NormalizeAutoGeneratedIndexNames.ShouldBe(v2.NormalizeAutoGeneratedIndexNames);
-        defaults.IgnoreIndexNames.ShouldBe(v2.IgnoreIndexNames);
-        defaults.NormalizeClusteringType.ShouldBe(v2.NormalizeClusteringType);
-        defaults.IgnoreIndexSortOrder.ShouldBe(v2.IgnoreIndexSortOrder);
-        defaults.IncludeStoredProcedureText.ShouldBe(v2.IncludeStoredProcedureText);
+        defaults.Tables.ShouldBe(v2.Tables);
+        defaults.Columns.ShouldBe(v2.Columns);
+        defaults.Indexes.ShouldBe(v2.Indexes);
+        defaults.Constraints.ShouldBe(v2.Constraints);
+        defaults.Modules.ShouldBe(v2.Modules);
         defaults.SchemaFilter.ShouldBe(v2.SchemaFilter);
         defaults.ObjectNamesToIgnore.ShouldBe(v2.ObjectNamesToIgnore);
 
         // Mutating one preset instance must not affect subsequent accesses
         var first = SchemaHashOptions.V2;
-        first.IgnoreIndexSortOrder = true;
-        SchemaHashOptions.V2.IgnoreIndexSortOrder.ShouldBeFalse("Preset properties must return a fresh instance on every access");
+        first.Indexes = IndexNormalization.IgnoreSortOrder;
+        SchemaHashOptions.V2.Indexes.ShouldBe(IndexNormalization.Strict, "Preset properties must return a fresh instance on every access");
+    }
+
+    #endregion
+
+    #region Envelope version
+
+    [TestMethod]
+    public async Task Envelope_SameSchemaDifferentPresets_ShareVersion_ButCompareAsDifferent()
+    {
+        // The envelope does not encode the comparison options: two hashes of the same database under
+        // different presets share the version but produce different hashes, so Compare reports Different
+        // (NOT Incomparable). This documents the deliberate design — callers must use matching options;
+        // an options mismatch is indistinguishable from a genuine schema difference.
+        var dbName = await CreateTestDatabaseAsync("EnvelopeDifferentPresets");
+
+        await ExecuteSqlAsync(dbName, @"
+            CREATE TABLE Assets (
+                Id INT NOT NULL CONSTRAINT PK_Assets PRIMARY KEY,
+                Created DATETIME2 NOT NULL
+            )");
+        await ExecuteSqlAsync(dbName, "CREATE INDEX IX_Assets_Created ON Assets(Created DESC)");
+
+        var schema = await ExtractSchemaAsync(dbName);
+
+        var v2 = SchemaHashResult.Parse(zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema, SchemaHashOptions.V2));
+        var structural = SchemaHashResult.Parse(zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema, SchemaHashOptions.Structural));
+
+        v2.Version.ShouldBe(structural.Version, "The hash-format version does not depend on the comparison options");
+        v2.Hash.ShouldNotBe(structural.Hash, "Structural normalizes away the DESC key and constraint name, changing the hash");
+
+        SchemaHashResult.Compare(v2, structural).ShouldBe(SchemaHashComparison.Different, "Different options are not detected — a hash mismatch under the same version reads as Different");
+    }
+
+    [TestMethod]
+    public async Task Envelope_SameSchemaSameOptions_IsFullyEqual()
+    {
+        var dbName = await CreateTestDatabaseAsync("EnvelopeEqual");
+
+        await ExecuteSqlAsync(dbName, @"
+            CREATE TABLE Assets (
+                Id INT NOT NULL CONSTRAINT PK_Assets PRIMARY KEY,
+                Created DATETIME2 NOT NULL
+            )");
+
+        var schema = await ExtractSchemaAsync(dbName);
+
+        var a = zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema, SchemaHashOptions.V2);
+        var b = zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema, SchemaHashOptions.V2);
+
+        a.ShouldBe(b, "The whole envelope is deterministic for the same schema and options");
+        SchemaHashResult.Compare(a, b).ShouldBe(SchemaHashComparison.Equal);
     }
 
     #endregion

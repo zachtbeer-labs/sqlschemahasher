@@ -60,8 +60,8 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
         var schema = await ExtractSchemaAsync(dbName);
         var index = schema.Tables.Single(t => t.Name == "Assets").Indexes.Single(i => i.Name == "IX_Assets_Name");
 
-        index.Keys.ShouldNotBeNull();
-        index.Keys.ShouldStartWith("Name", customMessage: "The key column must come first; included columns must not be sorted in front of it");
+        index.KeyColumns.Select(k => k.Name).ShouldBe(new[] { "Name" }, customMessage: "Only the key column belongs in KeyColumns; included columns must not appear there");
+        index.IncludedColumns.ShouldContain("Created", customMessage: "The included column must be captured in IncludedColumns, not the key list");
     }
 
     [TestMethod]
@@ -109,8 +109,8 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
         var columns = new List<ColumnSchema> { new("Id", "int", 4, 10, 0, false) };
         var tables = new List<TableSchema>
         {
-            new("dbo", "Åland", columns, new List<IndexSchema>(), new List<ConstraintSchema>(), null),
-            new("dbo", "Borders", columns, new List<IndexSchema>(), new List<ConstraintSchema>(), null)
+            new("dbo", "Åland", columns, new List<IndexSchema>(), new List<KeyConstraintSchema>(), new List<ForeignKeyConstraintSchema>(), new List<CheckConstraintSchema>(), new List<DefaultConstraintSchema>(), null),
+            new("dbo", "Borders", columns, new List<IndexSchema>(), new List<KeyConstraintSchema>(), new List<ForeignKeyConstraintSchema>(), new List<CheckConstraintSchema>(), new List<DefaultConstraintSchema>(), null)
         };
         var schema = new SchemaMetadata(tables, new List<StoredProcedureSchema>(), new List<UserDefinedTableTypeSchema>());
 
@@ -375,12 +375,12 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
         var columns = new List<ColumnSchema> { new("Id", "int", 4, 10, 0, false) };
         var tables = new List<TableSchema>
         {
-            new("dbo", "T", columns, new List<IndexSchema>(), new List<ConstraintSchema>(), null)
+            new("dbo", "T", columns, new List<IndexSchema>(), new List<KeyConstraintSchema>(), new List<ForeignKeyConstraintSchema>(), new List<CheckConstraintSchema>(), new List<DefaultConstraintSchema>(), null)
         };
         var schema = new SchemaMetadata(tables, new List<StoredProcedureSchema>(), new List<UserDefinedTableTypeSchema>());
 
         new SchemaHashCalculator().ComputeHash(schema)
-            .ShouldBe("b8f379e55fcbcac59abb75dea5ac5ddc73675b1d8b986e0bc1ff13ff3f0ada7d", "The integer byte layout of the hash must remain stable and independent of host endianness");
+            .ShouldBe("82d011e1ddb7ab5b7a89b5099181873768948d51f5eb595e87c6bbb76185f84c", "The integer byte layout of the hash must remain stable and independent of host endianness");
     }
 
     #endregion
@@ -435,7 +435,7 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
 
     #endregion
 
-    #region Column Collation
+    #region Column CollationName
 
     [TestMethod]
     public async Task Column_DifferentCollation_ChangesHash()
@@ -493,8 +493,8 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
 
         var columns = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "People").Columns;
 
-        columns.Single(c => c.Name == "Name").Collation.ShouldBe("SQL_Latin1_General_CP1_CS_AS", "A string column must carry its collation");
-        columns.Single(c => c.Name == "Id").Collation.ShouldBeNull("A non-string column has no collation");
+        columns.Single(c => c.Name == "Name").CollationName.ShouldBe("SQL_Latin1_General_CP1_CS_AS", "A string column must carry its collation");
+        columns.Single(c => c.Name == "Id").CollationName.ShouldBeNull("A non-string column has no collation");
     }
 
     #endregion
@@ -513,7 +513,7 @@ public class SchemaDeterminismAndFidelityTests : IntegrationTestBase
         await ExecuteSqlAsync(db1Name, "CREATE PROCEDURE SetValue @x INT OUTPUT AS BEGIN SET @x = @x END");
         await ExecuteSqlAsync(db2Name, "CREATE PROCEDURE SetValue @x INT AS BEGIN SET @x = @x END");
 
-        var noText = new SchemaHashOptions { IncludeStoredProcedureText = false };
+        var noText = new SchemaHashOptions { Modules = ModuleNormalization.IgnoreBodyText };
 
         (await ExtractAndHashAsync(db1Name, noText)).ShouldNotBe(await ExtractAndHashAsync(db2Name, noText), "An OUTPUT parameter must change the hash even when stored procedure text is excluded");
     }

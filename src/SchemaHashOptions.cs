@@ -2,8 +2,19 @@ namespace zachtbeer.SqlSchemaHasher;
 
 /// <summary>
 /// Configuration options for schema hash calculation.
-/// A bare <c>new SchemaHashOptions()</c> is the neutral baseline: everything compared exactly, nothing excluded.
-/// Use the static presets (<see cref="V1"/>, <see cref="V2"/>, <see cref="Structural"/>) for common configurations.
+/// A bare <c>new SchemaHashOptions()</c> is the neutral baseline: every domain at
+/// <c>…Normalization.Strict</c> (everything compared exactly), nothing excluded.
+///
+/// Comparison behavior is grouped into five domain <c>[Flags]</c> enums — <see cref="Tables"/>,
+/// <see cref="Columns"/>, <see cref="Indexes"/>, <see cref="Constraints"/>, <see cref="Modules"/> —
+/// each carrying fine-grained loosening bits plus named combos (<c>Strict</c>, <c>Structural</c>).
+/// Set a bit to remove a distinction from the hash, e.g.
+/// <c>new SchemaHashOptions { Indexes = IndexNormalization.IgnoreFillFactor | IndexNormalization.IgnoreLockOptions }</c>,
+/// or take a whole-domain combo, e.g. <c>Indexes = IndexNormalization.Structural</c>. Use the static
+/// presets (<see cref="V1"/>, <see cref="V2"/>, <see cref="Structural"/>) for common configurations.
+///
+/// Object <em>scoping</em> (which objects are compared at all) is separate from the normalization
+/// enums: see <see cref="SchemaFilter"/>, <see cref="ObjectNamesToIgnore"/>, <see cref="IgnoreSysDiagramObjects"/>.
 /// </summary>
 public sealed class SchemaHashOptions
 {
@@ -29,12 +40,12 @@ public sealed class SchemaHashOptions
 	public static SchemaHashOptions Default => V2;
 
 	/// <summary>
-	/// Comparison semantics matching v1 of this library: exact index names, exact clustering type,
-	/// index key sort order not compared (v1 never captured it), stored procedure text included,
+	/// Comparison semantics matching v1 of this library: exact index/constraint names, exact clustering
+	/// type, index key sort order not compared (v1 never captured it), stored procedure text included,
 	/// SSMS diagram objects ignored. Note: hashes still differ from package v1.x output because
 	/// v2 extraction fidelity fixes apply unconditionally.
 	/// </summary>
-	public static SchemaHashOptions V1 => new() { IgnoreSysDiagramObjects = true, IgnoreIndexSortOrder = true };
+	public static SchemaHashOptions V1 => new() { IgnoreSysDiagramObjects = true, Indexes = IndexNormalization.IgnoreSortOrder };
 
 	/// <summary>
 	/// Recommended v2 defaults: everything compared exactly (including index key sort order),
@@ -44,17 +55,68 @@ public sealed class SchemaHashOptions
 
 	/// <summary>
 	/// Opinionated structural comparison: answers "is the schema logically the same?" by ignoring
-	/// naming and physical layout noise — clustered vs nonclustered, index key sort order, index
-	/// names entirely, and SSMS diagram objects. Columns, key column sets, included columns,
-	/// uniqueness/primary-key-ness, constraints, identity columns, and stored procedures are still compared.
+	/// naming and physical layout noise — clustered vs nonclustered, index key sort order, index and
+	/// constraint names entirely, table column order, and SSMS diagram objects. Columns, key column
+	/// sets, included columns, uniqueness/primary-key-ness, constraint definitions, identity columns,
+	/// and stored procedures are still compared.
 	/// </summary>
-	public static SchemaHashOptions Structural => new() { IgnoreSysDiagramObjects = true, IgnoreIndexNames = true, NormalizeClusteringType = true, IgnoreIndexSortOrder = true, IgnoreConstraintNames = true };
+	public static SchemaHashOptions Structural => new()
+	{
+		IgnoreSysDiagramObjects = true,
+		Tables = TableNormalization.Structural,
+		Indexes = IndexNormalization.Structural,
+		Constraints = ConstraintNormalization.Structural,
+	};
 
 	/// <summary>
-	/// Object names to exclude from schema extraction (case-insensitive).
-	/// Default: empty (no objects excluded). Composes additively with <see cref="IgnoreSysDiagramObjects"/>.
+	/// Table-level normalization (column order, identity seed/NFR, temporal retention).
+	/// Default: <see cref="TableNormalization.Strict"/> (everything compared exactly).
+	/// </summary>
+	public TableNormalization Tables { get; set; } = TableNormalization.Strict;
+
+	/// <summary>
+	/// Column-level normalization (collation, ANSI padding, dynamic data masking).
+	/// Default: <see cref="ColumnNormalization.Strict"/> (everything compared exactly).
+	/// </summary>
+	public ColumnNormalization Columns { get; set; } = ColumnNormalization.Strict;
+
+	/// <summary>
+	/// Index normalization (names, clustering, key sort order, fill factor, pad index, lock options, disabled state).
+	/// Default: <see cref="IndexNormalization.Strict"/> (everything compared exactly).
+	/// </summary>
+	public IndexNormalization Indexes { get; set; } = IndexNormalization.Strict;
+
+	/// <summary>
+	/// Constraint normalization (names, FK/CHECK disabled/trust/NOT-FOR-REPLICATION enforcement state).
+	/// Default: <see cref="ConstraintNormalization.Strict"/> (everything compared exactly).
+	/// </summary>
+	public ConstraintNormalization Constraints { get; set; } = ConstraintNormalization.Strict;
+
+	/// <summary>
+	/// Programmable-module normalization (stored procedure body text, CREATE-time SET options).
+	/// Default: <see cref="ModuleNormalization.Strict"/> (body text and SET options compared exactly).
+	/// </summary>
+	public ModuleNormalization Modules { get; set; } = ModuleNormalization.Strict;
+
+	/// <summary>
+	/// Object names to exclude from schema extraction. An entry may be a <em>bare</em> name (e.g.
+	/// <c>Orders</c>), which matches an object of that name in <em>any</em> schema, or
+	/// <em>schema-qualified</em> (e.g. <c>sales.Orders</c>), which matches only that schema's object —
+	/// prefer the qualified form to avoid unintentionally excluding a same-named object in another schema.
+	/// Matching uses <see cref="ObjectNameComparer"/> (case-insensitive by default), independent of the
+	/// comparer of the set assigned here. Default: empty (no objects excluded). Composes additively with
+	/// <see cref="IgnoreSysDiagramObjects"/>.
 	/// </summary>
 	public IReadOnlySet<string> ObjectNamesToIgnore { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+	/// <summary>
+	/// Equality comparer used to match <see cref="ObjectNamesToIgnore"/> entries against object names
+	/// (bare and schema-qualified). Default: <see cref="StringComparer.OrdinalIgnoreCase"/>. Assign
+	/// <see cref="StringComparer.Ordinal"/> for case-sensitive matching. The library applies this
+	/// comparer itself, so matching no longer depends on the comparer of the assigned
+	/// <see cref="ObjectNamesToIgnore"/> set.
+	/// </summary>
+	public StringComparer ObjectNameComparer { get; set; } = StringComparer.OrdinalIgnoreCase;
 
 	/// <summary>
 	/// When true, excludes SSMS database diagram objects (sysdiagrams table and related helper procs)
@@ -69,52 +131,4 @@ public sealed class SchemaHashOptions
 	/// Examples: "dbo", "sales", "reporting"
 	/// </summary>
 	public string? SchemaFilter { get; set; } = null;
-
-	/// <summary>
-	/// When true, index names detected as auto-generated are replaced by a fixed sentinel in the hash,
-	/// so two databases whose auto-generated names differ only in their generated suffix compare equal.
-	/// Detection covers SQL Server system-generated names (e.g. 'PK__Employee__3214EC07A1B2C3D4')
-	/// and GUID-suffixed names (e.g. 'nci_wi_Asset_EF8A0893C0DB8B0FC4AD9EABBE187744').
-	/// Explicitly-named indexes still compare exactly. Ignored when <see cref="IgnoreIndexNames"/> is set.
-	/// Default: false (exact name comparison).
-	/// </summary>
-	public bool NormalizeAutoGeneratedIndexNames { get; set; } = false;
-
-	/// <summary>
-	/// When true, index names are excluded from the hash entirely — only the index definition
-	/// (keys, included columns, uniqueness, type) matters. Takes precedence over
-	/// <see cref="NormalizeAutoGeneratedIndexNames"/>.
-	/// Default: false. Enabled by <see cref="Structural"/>.
-	/// </summary>
-	public bool IgnoreIndexNames { get; set; } = false;
-
-	/// <summary>
-	/// When true, constraint names (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, DEFAULT) are excluded
-	/// from the hash — only the constraint definition (type, keys/expression, enforcement state)
-	/// matters. When false (default), renaming a constraint changes the hash, mirroring the exact
-	/// index-name comparison of <see cref="IgnoreIndexNames"/>.
-	/// Default: false (names compared). Enabled by <see cref="Structural"/>.
-	/// </summary>
-	public bool IgnoreConstraintNames { get; set; } = false;
-
-	/// <summary>
-	/// When true, normalizes clustered/nonclustered index types to a common value.
-	/// Useful when index clustering doesn't matter for schema comparison.
-	/// Default: false. Enabled by <see cref="Structural"/>.
-	/// </summary>
-	public bool NormalizeClusteringType { get; set; } = false;
-
-	/// <summary>
-	/// When true, index key sort order (ASC/DESC) is excluded from the hash.
-	/// Default: false (sort order is compared). Enabled by <see cref="V1"/> (which never captured
-	/// sort order) and <see cref="Structural"/>.
-	/// </summary>
-	public bool IgnoreIndexSortOrder { get; set; } = false;
-
-	/// <summary>
-	/// When true, includes stored procedure body text in the hash calculation.
-	/// When false, only the procedure name and parameter signatures are hashed.
-	/// Default: true (procedure body changes will change the hash).
-	/// </summary>
-	public bool IncludeStoredProcedureText { get; set; } = true;
 }

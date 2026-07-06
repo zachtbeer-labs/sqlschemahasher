@@ -48,9 +48,9 @@ public class KnownBugFixTests : IntegrationTestBase
 
         var columns = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "T").Columns;
 
-        columns.Single(c => c.Name == "Id").Ordinal.ShouldBe(1, "column_id must be captured as the ordinal");
-        columns.Single(c => c.Name == "Alpha").Ordinal.ShouldBe(2);
-        columns.Single(c => c.Name == "Beta").Ordinal.ShouldBe(3);
+        columns.Single(c => c.Name == "Id").ColumnId.ShouldBe(1, "column_id must be captured as the ordinal");
+        columns.Single(c => c.Name == "Alpha").ColumnId.ShouldBe(2);
+        columns.Single(c => c.Name == "Beta").ColumnId.ShouldBe(3);
     }
 
     #endregion
@@ -158,7 +158,7 @@ public class KnownBugFixTests : IntegrationTestBase
         await ExecuteSqlAsync(dbName, "ALTER TABLE Child WITH NOCHECK ADD CONSTRAINT FK_Child_Parent FOREIGN KEY (PId) REFERENCES Parent(Id)");
         await ExecuteSqlAsync(dbName, "ALTER TABLE Child NOCHECK CONSTRAINT FK_Child_Parent");
 
-        var fk = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "Child").Constraints.Single(c => c.Type == "FOREIGN KEY");
+        var fk = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "Child").ForeignKeys.Single();
         fk.IsDisabled.ShouldBeTrue("A NOCHECK CONSTRAINT foreign key must be reported as disabled");
         fk.IsNotTrusted.ShouldBeTrue("A WITH NOCHECK foreign key must be reported as untrusted");
     }
@@ -180,8 +180,8 @@ public class KnownBugFixTests : IntegrationTestBase
 
         (await ExtractAndHashAsync(db1Name)).ShouldNotBe(await ExtractAndHashAsync(db2Name), "By default a renamed constraint must change the hash, mirroring exact index-name comparison");
 
-        var ignoreNames = new SchemaHashOptions { IgnoreConstraintNames = true };
-        (await ExtractAndHashAsync(db1Name, ignoreNames)).ShouldBe(await ExtractAndHashAsync(db2Name, ignoreNames), "IgnoreConstraintNames must make a pure rename compare equal");
+        var ignoreNames = new SchemaHashOptions { Constraints = ConstraintNormalization.IgnoreNames };
+        (await ExtractAndHashAsync(db1Name, ignoreNames)).ShouldBe(await ExtractAndHashAsync(db2Name, ignoreNames), "ConstraintNormalization.IgnoreNames must make a pure rename compare equal");
         (await ExtractAndHashAsync(db1Name, SchemaHashOptions.Structural)).ShouldBe(await ExtractAndHashAsync(db2Name, SchemaHashOptions.Structural), "The Structural preset ignores constraint names");
     }
 
@@ -192,9 +192,9 @@ public class KnownBugFixTests : IntegrationTestBase
 
         await ExecuteSqlAsync(dbName, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Age INT NOT NULL, CONSTRAINT CK_Age_Positive CHECK (Age >= 0))");
 
-        var constraints = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "T").Constraints;
-        constraints.Single(c => c.Type == "CHECK").Name.ShouldBe("CK_Age_Positive", "The constraint name must be captured");
-        constraints.Single(c => c.Type == "PRIMARY KEY").Name.ShouldBe("PK_T");
+        var table = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "T");
+        table.CheckConstraints.Single().Name.ShouldBe("CK_Age_Positive", "The constraint name must be captured");
+        table.KeyConstraints.Single(c => c.Type == "PRIMARY KEY").Name.ShouldBe("PK_T");
     }
 
     #endregion
