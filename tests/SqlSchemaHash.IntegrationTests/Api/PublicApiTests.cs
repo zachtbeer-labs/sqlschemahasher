@@ -79,6 +79,19 @@ public class PublicApiTests : IntegrationTestBase
     }
 
     [TestMethod]
+    public async Task PublicApi_GetHashAsync_CancelledToken_ThrowsOperationCanceledException()
+    {
+        var dbName = await CreateTestDatabaseAsync("PublicApi_Cancellation");
+        await DatabaseTestHelpers.CreateEmployeesSchemaAsync(dbName);
+
+        var connectionString = GetConnectionString(dbName);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => zachtbeer.SqlSchemaHasher.SqlSchemaHash.GetHashAsync(connectionString, cts.Token));
+    }
+
+    [TestMethod]
     public async Task Envelope_SameSchemaSameOptions_IsFullyEqual()
     {
         var dbName = await CreateTestDatabaseAsync("EnvelopeEqual");

@@ -15,16 +15,28 @@ Use [GitHub Issues](https://github.com/zachtbeer-labs/sqlschemahasher/issues). F
 
 ### Prerequisites
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download)
+- [.NET SDK](https://dotnet.microsoft.com/download) matching the version pinned in `global.json` (the library multi-targets `net6.0` through `net10.0`; building the `net10.0` target requires a 10.0.x SDK)
 - [Docker](https://www.docker.com/) (for integration tests -- Testcontainers spins up SQL Server 2025)
 
 ### Build and Test
 
 ```bash
 dotnet build SqlSchemaHasher.sln
-dotnet test SqlSchemaHasher.sln
 dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 ```
+
+Tests are split into two projects:
+
+- **Unit tests** (`tests/SqlSchemaHash.UnitTests`) — fast, no database required:
+  ```bash
+  dotnet test tests/SqlSchemaHash.UnitTests
+  ```
+- **Integration tests** (`tests/SqlSchemaHash.IntegrationTests`) — require Docker (Testcontainers spins up SQL Server):
+  ```bash
+  dotnet test tests/SqlSchemaHash.IntegrationTests
+  ```
+
+`dotnet test SqlSchemaHasher.sln` runs both.
 
 ## Pull Request Guidelines
 
@@ -32,6 +44,16 @@ dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 2. Describe what you changed and why.
 3. Include tests for new or changed behavior.
 4. Make sure CI passes before requesting review.
+
+## Releasing
+
+Releases are manual (no MinVer or tag-driven versioning):
+
+1. Bump `<Version>` in `src/zachtbeer.SqlSchemaHasher.csproj`.
+2. Update `CHANGELOG.md`: set the release date on the version's heading (replacing "Unreleased") and confirm its comparison link at the bottom is correct.
+3. Merge to `main`.
+4. Run the `release.yml` workflow via `workflow_dispatch`, passing the matching version (e.g. `2.0.0`).
+5. Verify the NuGet listing, the SLSA provenance attestation, and the GitHub release it produces.
 
 ## Code Style
 

@@ -24,10 +24,10 @@ public class RegressionAnchorTests : MatrixTestBase
 {
     // Pinned hashes for RichReferenceSchema(). Captured from a green run against the
     // mcr.microsoft.com/mssql/server:2025-latest container. See class remarks.
-    private const string ExpectedStrictHash = "2:pVaLzeHJ87w+XualkpP5NUHJuMoQ6FuWJkfmAztZ1Js=";
-    private const string ExpectedV1Hash = "2:9qLTFzD6bQQjlw92EMYVIFmjz51qv21AmGR3wzqZyL0=";
-    private const string ExpectedV2Hash = "2:pVaLzeHJ87w+XualkpP5NUHJuMoQ6FuWJkfmAztZ1Js=";
-    private const string ExpectedStructuralHash = "2:XuV+VsucLx0dmKE3pvpLnNdLE2kme2TQX4BW9a7ZFpE=";
+    private const string ExpectedStrictHash = "2:NuOQs+gIkYg2AX1P65hj1u+MjHsPUSIUYm3C5qvB1gQ=";
+    private const string ExpectedV1Hash = "2:ca1I3vJYpLZUINauyMJnRihTJUN0EdPN1Y4kxf0HKog=";
+    private const string ExpectedV2Hash = "2:NuOQs+gIkYg2AX1P65hj1u+MjHsPUSIUYm3C5qvB1gQ=";
+    private const string ExpectedStructuralHash = "2:3w0gf6WjICTGFHvDstENjZOoDX36j/lnwOXr9gNygOk=";
 
     /// <summary>
     /// A deliberately rich, fully explicitly-named schema exercising most catalog surfaces the hasher
@@ -35,7 +35,10 @@ public class RegressionAnchorTests : MatrixTestBase
     /// column, a rowguid column with a default, a sparse column, a CHECK, an XML DOCUMENT column;
     /// a table with an identity(seed) PK, an untrusted NOT-FOR-REPLICATION cascading FK, a filtered
     /// index, a nonclustered columnstore index and a disabled DESC index; a stored procedure created
-    /// under a non-default SET option; and a table type with an identity column.
+    /// under a non-default SET option; a table type with an identity column; an ordinary view; a
+    /// schemabound indexed view; a scalar function over an alias-typed parameter; an inline TVF; a
+    /// multi-statement TVF; a disabled DML trigger; a sequence with a non-default start/increment;
+    /// a synonym; and extended properties (database-scoped plus MS_Description on a table and a column).
     /// Dependency order matters: all QUOTED_IDENTIFIER-ON DDL runs before the proc flips it OFF.
     /// </summary>
     private static string[] RichReferenceSchema() => new[]
@@ -85,6 +88,43 @@ public class RegressionAnchorTests : MatrixTestBase
             Sku NVARCHAR(20) NOT NULL,
             Qty INT NOT NULL
         )",
+
+        // Ordinary view.
+        @"CREATE VIEW dbo.ActiveMemberships AS SELECT MembershipId, PersonId FROM dbo.Membership WHERE Level > 0",
+
+        // Schemabound indexed view with an explicitly-named unique clustered index.
+        @"CREATE VIEW dbo.PersonSummary WITH SCHEMABINDING AS SELECT PersonId, Email FROM dbo.Person",
+        @"SET ARITHABORT ON",
+        @"CREATE UNIQUE CLUSTERED INDEX IX_PersonSummary ON dbo.PersonSummary(PersonId)",
+
+        // Scalar function over an alias-typed parameter.
+        @"CREATE TYPE dbo.SmallAmount FROM DECIMAL(9,2) NOT NULL",
+        @"CREATE FUNCTION dbo.ApplyDiscount(@amount dbo.SmallAmount) RETURNS DECIMAL(9,2) AS BEGIN RETURN @amount * 0.9 END",
+
+        // Inline table-valued function.
+        @"CREATE FUNCTION dbo.GetActiveMemberships() RETURNS TABLE AS RETURN (SELECT MembershipId, PersonId FROM dbo.Membership WHERE Level > 0)",
+
+        // Multi-statement table-valued function.
+        @"CREATE FUNCTION dbo.GetMembershipLevels() RETURNS @Result TABLE (Level INT NOT NULL) AS
+            BEGIN
+                INSERT INTO @Result SELECT DISTINCT Level FROM dbo.Membership
+                RETURN
+            END",
+
+        // DML trigger, disabled (a non-default flag).
+        @"CREATE TRIGGER dbo.trg_Membership_Audit ON dbo.Membership AFTER INSERT AS BEGIN SET NOCOUNT ON END",
+        @"DISABLE TRIGGER dbo.trg_Membership_Audit ON dbo.Membership",
+
+        // Sequence with a non-default start value and increment.
+        @"CREATE SEQUENCE dbo.OrderNumberSeq AS BIGINT START WITH 1000 INCREMENT BY 5",
+
+        // Synonym.
+        @"CREATE SYNONYM dbo.PersonSyn FOR dbo.Person",
+
+        // Extended properties: database-scoped plus MS_Description on a table and a column.
+        @"EXEC sys.sp_addextendedproperty @name = N'AppVersion', @value = N'2.0'",
+        @"EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'People known to the system', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'Person'",
+        @"EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Case-sensitive unique e-mail', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'Person', @level2type = N'COLUMN', @level2name = N'Email'",
     };
 
     [TestMethod]

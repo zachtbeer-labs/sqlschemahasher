@@ -17,16 +17,19 @@ public static class SqlSchemaHash
     /// using <see cref="SchemaHashOptions.Default"/> (an alias for <see cref="SchemaHashOptions.V2"/>).
     /// </summary>
     /// <param name="connectionString">SQL Server connection string.</param>
+    /// <param name="cancellationToken">Token to cancel the extraction and hash computation.</param>
     /// <returns>Versioned envelope <c>&lt;version&gt;:&lt;base64hash&gt;</c>. See <see cref="SchemaHashResult"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="connectionString"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="connectionString"/> is empty or whitespace.</exception>
     /// <example>
     /// <code>
     /// var hash = await SqlSchemaHash.GetHashAsync("Server=localhost;Database=MyDb;...");
     /// // Returns: "2:dGhpcyBpcyBhIGhhc2g..."
     /// </code>
     /// </example>
-    public static async Task<string> GetHashAsync(string connectionString)
+    public static async Task<string> GetHashAsync(string connectionString, CancellationToken cancellationToken = default)
     {
-        return await GetHashAsync(connectionString, SchemaHashOptions.Default);
+        return await GetHashAsync(connectionString, SchemaHashOptions.Default, cancellationToken);
     }
 
     /// <summary>
@@ -34,7 +37,10 @@ public static class SqlSchemaHash
     /// </summary>
     /// <param name="connectionString">SQL Server connection string.</param>
     /// <param name="options">Options for extraction and hash calculation (schema filter, index name normalization, etc.).</param>
+    /// <param name="cancellationToken">Token to cancel the extraction and hash computation.</param>
     /// <returns>Versioned envelope <c>&lt;version&gt;:&lt;base64hash&gt;</c>. See <see cref="SchemaHashResult"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="connectionString"/> or <paramref name="options"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="connectionString"/> is empty or whitespace.</exception>
     /// <example>
     /// <code>
     /// // Use a preset (V1, V2, Structural)...
@@ -46,12 +52,15 @@ public static class SqlSchemaHash
     /// var hash2 = await SqlSchemaHash.GetHashAsync("Server=localhost;Database=MyDb;...", options);
     /// </code>
     /// </example>
-    public static async Task<string> GetHashAsync(string connectionString, SchemaHashOptions options)
+    public static async Task<string> GetHashAsync(string connectionString, SchemaHashOptions options, CancellationToken cancellationToken = default)
     {
+        ValidateConnectionString(connectionString);
+        ValidateOptions(options);
+
         var extractor = new SchemaExtractor();
         var calculator = new SchemaHashCalculator(options);
 
-        var schema = await extractor.ExtractSchemaAsync(connectionString, options);
+        var schema = await extractor.ExtractSchemaAsync(connectionString, options, cancellationToken);
         var hexHash = calculator.ComputeHash(schema);
 
         return Envelope(hexHash);
@@ -62,23 +71,32 @@ public static class SqlSchemaHash
     /// Use this if you need access to the raw schema information.
     /// </summary>
     /// <param name="connectionString">SQL Server connection string.</param>
-    /// <returns>Schema metadata containing tables, stored procedures, and user-defined types.</returns>
-    public static async Task<SchemaMetadata> ExtractSchemaAsync(string connectionString)
+    /// <param name="cancellationToken">Token to cancel the extraction.</param>
+    /// <returns>Schema metadata containing tables, stored procedures, UDTs, views, functions, triggers, sequences, synonyms, and extended properties.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="connectionString"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="connectionString"/> is empty or whitespace.</exception>
+    public static async Task<SchemaMetadata> ExtractSchemaAsync(string connectionString, CancellationToken cancellationToken = default)
     {
-        return await ExtractSchemaAsync(connectionString, null);
+        return await ExtractSchemaAsync(connectionString, SchemaHashOptions.Default, cancellationToken);
     }
 
     /// <summary>
-    /// Extracts detailed schema metadata from a SQL Server database with optional filtering.
+    /// Extracts detailed schema metadata from a SQL Server database with custom options.
     /// Use this if you need access to the raw schema information.
     /// </summary>
     /// <param name="connectionString">SQL Server connection string.</param>
-    /// <param name="options">Options for extraction (e.g., schema filter). Pass null for defaults.</param>
-    /// <returns>Schema metadata containing tables, stored procedures, and user-defined types.</returns>
-    public static async Task<SchemaMetadata> ExtractSchemaAsync(string connectionString, SchemaHashOptions? options)
+    /// <param name="options">Options for extraction (e.g., schema filter).</param>
+    /// <param name="cancellationToken">Token to cancel the extraction.</param>
+    /// <returns>Schema metadata containing tables, stored procedures, UDTs, views, functions, triggers, sequences, synonyms, and extended properties.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="connectionString"/> or <paramref name="options"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="connectionString"/> is empty or whitespace.</exception>
+    public static async Task<SchemaMetadata> ExtractSchemaAsync(string connectionString, SchemaHashOptions options, CancellationToken cancellationToken = default)
     {
+        ValidateConnectionString(connectionString);
+        ValidateOptions(options);
+
         var extractor = new SchemaExtractor();
-        return await extractor.ExtractSchemaAsync(connectionString, options);
+        return await extractor.ExtractSchemaAsync(connectionString, options, cancellationToken);
     }
 
     /// <summary>
@@ -86,13 +104,46 @@ public static class SqlSchemaHash
     /// Useful when you already have schema metadata and want to compute multiple hashes with different options.
     /// </summary>
     /// <param name="schema">Previously extracted schema metadata.</param>
-    /// <param name="options">Options for hash calculation.</param>
+    /// <param name="options">Options for hash calculation. Pass null for <see cref="SchemaHashOptions.Default"/>.</param>
     /// <returns>Versioned envelope <c>&lt;version&gt;:&lt;base64hash&gt;</c>. See <see cref="SchemaHashResult"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="schema"/> is null.</exception>
     public static string ComputeHash(SchemaMetadata schema, SchemaHashOptions? options = null)
     {
+        if (schema is null)
+        {
+            throw new ArgumentNullException(nameof(schema));
+        }
+
         var calculator = new SchemaHashCalculator(options ?? SchemaHashOptions.Default);
         var hexHash = calculator.ComputeHash(schema);
         return Envelope(hexHash);
+    }
+
+    /// <summary>
+    /// Validates that a connection string was supplied.
+    /// </summary>
+    private static void ValidateConnectionString(string connectionString)
+    {
+        if (connectionString is null)
+        {
+            throw new ArgumentNullException(nameof(connectionString));
+        }
+
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new ArgumentException("Connection string cannot be empty or whitespace.", nameof(connectionString));
+        }
+    }
+
+    /// <summary>
+    /// Validates that a required <see cref="SchemaHashOptions"/> argument was supplied.
+    /// </summary>
+    private static void ValidateOptions(SchemaHashOptions options)
+    {
+        if (options is null)
+        {
+            throw new ArgumentNullException(nameof(options));
+        }
     }
 
     /// <summary>

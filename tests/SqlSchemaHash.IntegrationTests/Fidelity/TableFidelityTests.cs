@@ -177,6 +177,57 @@ public class TableFidelityTests : IntegrationTestBase
         t.HistoryRetentionPeriodUnit.ShouldBeNull("INFINITE retention has no finite unit");
     }
 
+    [TestMethod]
+    public async Task MemoryOptimizedTable_VsDiskBased_ChangesHash_AndIsExtracted()
+    {
+        var memDbName = await CreateTestDatabaseAsync("MemOpt1");
+        var diskDbName = await CreateTestDatabaseAsync("MemOpt2");
+
+        await EnableMemoryOptimizedAsync(memDbName);
+        await ExecuteSqlAsync(memDbName, "CREATE TABLE T (Id INT NOT NULL, Val INT NOT NULL, CONSTRAINT PK_T PRIMARY KEY NONCLUSTERED (Id)) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)");
+        await ExecuteSqlAsync(diskDbName, "CREATE TABLE T (Id INT NOT NULL, Val INT NOT NULL, CONSTRAINT PK_T PRIMARY KEY NONCLUSTERED (Id))");
+
+        (await ExtractAndHashAsync(memDbName)).ShouldNotBe(await ExtractAndHashAsync(diskDbName), "A memory-optimized table is a fundamentally different storage engine and must change the hash");
+
+        var memTable = (await ExtractSchemaAsync(memDbName)).Tables.Single(t => t.Name == "T");
+        memTable.IsMemoryOptimized.ShouldBeTrue("A memory-optimized table must be reported as such");
+        memTable.DurabilityDesc.ShouldBe("SCHEMA_AND_DATA", "A memory-optimized table's durability must be captured");
+
+        var diskTable = (await ExtractSchemaAsync(diskDbName)).Tables.Single(t => t.Name == "T");
+        diskTable.IsMemoryOptimized.ShouldBeFalse("A disk-based table must not be reported as memory-optimized");
+    }
+
+    [TestMethod]
+    public async Task MemoryOptimizedTable_DurabilitySchemaOnlyVsSchemaAndData_ChangesHash()
+    {
+        var schemaAndDataDbName = await CreateTestDatabaseAsync("MemDur1");
+        var schemaOnlyDbName = await CreateTestDatabaseAsync("MemDur2");
+
+        await EnableMemoryOptimizedAsync(schemaAndDataDbName);
+        await EnableMemoryOptimizedAsync(schemaOnlyDbName);
+
+        await ExecuteSqlAsync(schemaAndDataDbName, "CREATE TABLE T (Id INT NOT NULL, Val INT NOT NULL, CONSTRAINT PK_T PRIMARY KEY NONCLUSTERED (Id)) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)");
+        await ExecuteSqlAsync(schemaOnlyDbName, "CREATE TABLE T (Id INT NOT NULL, Val INT NOT NULL, CONSTRAINT PK_T PRIMARY KEY NONCLUSTERED (Id)) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_ONLY)");
+
+        (await ExtractAndHashAsync(schemaAndDataDbName)).ShouldNotBe(await ExtractAndHashAsync(schemaOnlyDbName), "DURABILITY = SCHEMA_ONLY vs SCHEMA_AND_DATA is a genuine persistence difference and must change the hash");
+    }
+
+    [TestMethod]
+    public async Task MemoryOptimizedTable_Identical_SameHash()
+    {
+        var db1Name = await CreateTestDatabaseAsync("MemDeterm1");
+        var db2Name = await CreateTestDatabaseAsync("MemDeterm2");
+
+        await EnableMemoryOptimizedAsync(db1Name);
+        await EnableMemoryOptimizedAsync(db2Name);
+
+        const string tableSql = "CREATE TABLE T (Id INT NOT NULL, Val INT NOT NULL, CONSTRAINT PK_T PRIMARY KEY NONCLUSTERED (Id)) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)";
+        await ExecuteSqlAsync(db1Name, tableSql);
+        await ExecuteSqlAsync(db2Name, tableSql);
+
+        (await ExtractAndHashAsync(db1Name)).ShouldBe(await ExtractAndHashAsync(db2Name), "Two identical memory-optimized tables in separate databases must hash identically");
+    }
+
     private static string TemporalTableSql(string historyTable, string? retention)
     {
         var versioning = retention is null

@@ -1,12 +1,12 @@
 using zachtbeer.SqlSchemaHasher;
 using Shouldly;
 
-namespace SqlSchemaHash.IntegrationTests.Api;
+namespace SqlSchemaHash.UnitTests.Api;
 
 /// <summary>
 /// Pure unit tests for the <see cref="SchemaHashResult"/> envelope: string round-tripping,
 /// parsing (including legacy bare-base64 rejection), and the version/hash comparison
-/// truth table. These require no database and do not derive from <see cref="IntegrationTestBase"/>.
+/// truth table. These require no database.
 /// </summary>
 [TestClass]
 public class SchemaHashEnvelopeTests

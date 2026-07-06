@@ -16,7 +16,7 @@ namespace zachtbeer.SqlSchemaHasher;
 /// its <em>effective</em> value before it is sorted and hashed, so option-equivalent databases sort
 /// their elements the same way and hash identically.
 /// </summary>
-public sealed class SchemaHashCalculator
+internal sealed class SchemaHashCalculator
 {
     private readonly SchemaHashOptions _options;
 
@@ -64,6 +64,45 @@ public sealed class SchemaHashCalculator
         foreach (var udt in schema.UserDefinedTableTypes.OrderBy(u => u.SchemaName, StringComparer.Ordinal).ThenBy(u => u.Name, StringComparer.Ordinal))
         {
             HashUserDefinedTableType(hasher, udt);
+        }
+
+        // Hash views in sorted order by fully-qualified name. No count prefix and each element opens
+        // with its own marker string, so appending this section changes the hash only for databases
+        // that actually contain views (same for the five sections that follow).
+        foreach (var view in schema.Views.OrderBy(v => v.SchemaName, StringComparer.Ordinal).ThenBy(v => v.Name, StringComparer.Ordinal))
+        {
+            HashView(hasher, view);
+        }
+
+        // Hash functions in sorted order by fully-qualified name
+        foreach (var function in schema.Functions.OrderBy(f => f.SchemaName, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal))
+        {
+            HashFunction(hasher, function);
+        }
+
+        // Hash triggers in sorted order by fully-qualified name
+        foreach (var trigger in schema.Triggers.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal))
+        {
+            HashTrigger(hasher, trigger);
+        }
+
+        // Hash sequences in sorted order by fully-qualified name
+        foreach (var sequence in schema.Sequences.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal))
+        {
+            HashSequence(hasher, sequence);
+        }
+
+        // Hash synonyms in sorted order by fully-qualified name
+        foreach (var synonym in schema.Synonyms.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal))
+        {
+            HashSynonym(hasher, synonym);
+        }
+
+        // Hash extended properties in sorted order by class, resolved target, then property name.
+        // Null target parts sort as empty strings; ClassDesc keeps the scopes distinct.
+        foreach (var property in schema.ExtendedProperties.OrderBy(p => p.ClassDesc, StringComparer.Ordinal).ThenBy(p => p.SchemaName ?? string.Empty, StringComparer.Ordinal).ThenBy(p => p.ObjectName ?? string.Empty, StringComparer.Ordinal).ThenBy(p => p.SubObjectName ?? string.Empty, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal))
+        {
+            HashExtendedProperty(hasher, property);
         }
 
         var hash = hasher.GetHashAndReset();
@@ -357,6 +396,129 @@ public sealed class SchemaHashCalculator
         HashKeyConstraints(hasher, udt.KeyConstraints);
         HashCheckConstraints(hasher, udt.CheckConstraints);
         HashDefaultConstraints(hasher, udt.DefaultConstraints);
+    }
+
+    private void HashView(IncrementalHash hasher, ViewSchema view)
+    {
+        AppendString(hasher, "VIEW:");
+        AppendString(hasher, view.SchemaName);
+        AppendString(hasher, view.Name);
+
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
+        {
+            AppendString(hasher, "DEFHASH:");
+            AppendString(hasher, view.DefinitionHash);
+        }
+
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : view.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : view.UsesQuotedIdentifier);
+
+        // Reuses the table index hashing so all IndexNormalization bits apply to indexed views too;
+        // empty for an ordinary view.
+        HashIndexes(hasher, view.Indexes);
+    }
+
+    private void HashFunction(IncrementalHash hasher, FunctionSchema function)
+    {
+        AppendString(hasher, "FUNC:");
+        AppendString(hasher, function.SchemaName);
+        AppendString(hasher, function.Name);
+        // Unconditional (survives IgnoreBodyText): distinguishes scalar/inline-TVF/multi-statement-TVF,
+        // a shape change that need not touch a byte of body text.
+        AppendString(hasher, function.TypeDesc);
+
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
+        {
+            AppendString(hasher, "DEFHASH:");
+            AppendString(hasher, function.DefinitionHash);
+        }
+
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : function.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : function.UsesQuotedIdentifier);
+
+        // Parameters hash in list order (parameter_id order from extraction); a scalar function's
+        // return-type row (parameter_id = 0) hashes first.
+        foreach (var param in function.Parameters)
+        {
+            HashParameter(hasher, param);
+        }
+    }
+
+    private void HashTrigger(IncrementalHash hasher, TriggerSchema trigger)
+    {
+        AppendString(hasher, "TRIGGER:");
+        AppendString(hasher, trigger.SchemaName);
+        AppendString(hasher, trigger.Name);
+        AppendString(hasher, trigger.ParentSchemaName);
+        AppendString(hasher, trigger.ParentName);
+        // Unconditional — no normalization bits govern triggers in this round.
+        // ConstraintNormalization.IgnoreDisabled is a constraints-domain bit and does not reach triggers.
+        AppendBool(hasher, trigger.IsDisabled);
+        AppendBool(hasher, trigger.IsInsteadOfTrigger);
+        AppendBool(hasher, trigger.IsNotForReplication);
+
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
+        {
+            AppendString(hasher, "DEFHASH:");
+            AppendString(hasher, trigger.DefinitionHash);
+        }
+
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : trigger.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : trigger.UsesQuotedIdentifier);
+
+        AppendInt(hasher, trigger.Events.Count);
+        foreach (var evt in trigger.Events)
+        {
+            AppendString(hasher, evt.Type);
+            AppendBool(hasher, evt.IsFirst);
+            AppendBool(hasher, evt.IsLast);
+        }
+    }
+
+    private void HashSequence(IncrementalHash hasher, SequenceSchema sequence)
+    {
+        AppendString(hasher, "SEQUENCE:");
+        AppendString(hasher, sequence.SchemaName);
+        AppendString(hasher, sequence.Name);
+        AppendString(hasher, sequence.DataType);
+        AppendInt(hasher, sequence.Precision);
+        AppendString(hasher, sequence.StartValue);
+        AppendString(hasher, sequence.Increment);
+        AppendString(hasher, sequence.MinimumValue);
+        AppendString(hasher, sequence.MaximumValue);
+        AppendBool(hasher, sequence.IsCycling);
+        AppendBool(hasher, sequence.IsCached);
+        // -1 sentinel keeps "no explicit cache size" (NO CACHE or default CACHE) distinct from any real
+        // size; (IsCached, CacheSize) together encode NO CACHE / default CACHE / CACHE n unambiguously.
+        AppendInt(hasher, sequence.CacheSize ?? -1);
+    }
+
+    private void HashSynonym(IncrementalHash hasher, SynonymSchema synonym)
+    {
+        AppendString(hasher, "SYNONYM:");
+        AppendString(hasher, synonym.SchemaName);
+        AppendString(hasher, synonym.Name);
+        AppendString(hasher, synonym.BaseObjectName);
+    }
+
+    private void HashExtendedProperty(IncrementalHash hasher, ExtendedPropertySchema property)
+    {
+        AppendString(hasher, "EXTPROP:");
+        AppendString(hasher, property.ClassDesc);
+        AppendString(hasher, property.SchemaName ?? string.Empty);
+        AppendString(hasher, property.ObjectName ?? string.Empty);
+        AppendString(hasher, property.SubObjectName ?? string.Empty);
+        AppendString(hasher, property.Name);
+        // A NULL value hashes like an empty string here, but ValueType is also NULL only for a NULL
+        // value (an empty nvarchar value carries ValueType "nvarchar"), so the pair stays unambiguous.
+        AppendString(hasher, property.ValueType ?? string.Empty);
+        AppendString(hasher, property.Value ?? string.Empty);
     }
 
     /// <summary>

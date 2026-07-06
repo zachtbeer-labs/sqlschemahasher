@@ -18,6 +18,12 @@ When you manage many SQL Server databases, schemas drift. Someone modifies a tab
 dotnet add package zachtbeer.SqlSchemaHasher
 ```
 
+## Requirements
+
+- **SQL Server**: 2016 (13.x) or later, or Azure SQL. Extraction reads catalog columns introduced in 2016 (temporal `temporal_type`/`generated_always_type`, `sys.masked_columns`, `encryption_type_desc`), so older servers are not supported.
+- **Exercised against**: SQL Server 2019 and 2022 in CI, SQL Server 2025 locally in the test suite.
+- **.NET**: targets `net6.0`, `net7.0`, `net8.0`, `net9.0`, and `net10.0`.
+
 ## Quickstart
 
 ```csharp
@@ -99,6 +105,11 @@ var schema = await SqlSchemaHash.ExtractSchemaAsync(connectionString);
 Console.WriteLine($"Tables: {schema.Tables.Count}");
 Console.WriteLine($"Stored Procedures: {schema.StoredProcedures.Count}");
 Console.WriteLine($"User-Defined Types: {schema.UserDefinedTableTypes.Count}");
+Console.WriteLine($"Views: {schema.Views.Count}");
+Console.WriteLine($"Functions: {schema.Functions.Count}");
+Console.WriteLine($"Triggers: {schema.Triggers.Count}");
+Console.WriteLine($"Sequences: {schema.Sequences.Count}");
+Console.WriteLine($"Synonyms: {schema.Synonyms.Count}");
 ```
 
 ### `SqlSchemaHash.ComputeHash(schema, options)`
@@ -149,6 +160,13 @@ The hash includes:
 - **Tables**: Schema name, table name, columns (name, type, precision, nullability, string collation, and — for computed columns — the formula and whether it is `PERSISTED`), indexes (including key sort order, INCLUDE columns, and filtered-index predicates), constraints (foreign keys include the referenced table/column and the `ON DELETE`/`ON UPDATE` referential actions), identity columns
 - **Stored Procedures**: Schema name, procedure name, parameters (including `OUTPUT` direction and the `READONLY` flag), and a hash of the procedure body (detects logic changes)
 - **User-Defined Table Types**: Schema name, type name, columns (including string collation and computed column formulas)
+- **Views**: Schema name, view name, a hash of the view body, CREATE-time SET options, and — for a schemabound indexed view — its indexes. View columns are deliberately not extracted (the definition hash is the view's identity; a `SELECT *` view's column metadata goes stale until `sp_refreshview` runs, which would otherwise inject spurious diffs)
+- **Functions**: Schema name, function name, the raw `type_desc` (distinguishing scalar / inline table-valued / multi-statement table-valued functions even when body text is excluded), parameters (a scalar function's return type arrives as its own parameter row), and a hash of the function body
+- **Triggers**: Schema name, trigger name, parent table/view, disabled/`INSTEAD OF`/`NOT FOR REPLICATION` flags, the DML event set together with `FIRST`/`LAST` ordering (set out-of-band via `sp_settriggerorder`), and a hash of the trigger body
+- **Sequences**: Schema name, sequence name, data type, precision, start value, increment, min/max bounds, cycling, and cache size — **not** the current value, which is runtime state that advances on every `NEXT VALUE FOR` and would make the hash unstable across otherwise-identical databases
+- **Synonyms**: Schema name, synonym name, and the target object name exactly as the catalog stores it (synonym targets are not validated or resolved at CREATE time)
+- **Extended properties**: name, value, and value base type of every `sys.extended_properties` entry (e.g. `MS_Description`) scoped to the database, a schema, an in-scope object, a column, a parameter, an index, or a user-defined table type — targets are resolved to names, and a property follows its owner out of the hash when the owner is excluded. Set `IgnoreExtendedProperties` to leave them out entirely. Properties on constraint objects are not captured (system-generated constraint names are not deterministic across databases)
+- **Alias scalar types**: a column, parameter, or sequence typed with an alias scalar type (`CREATE TYPE dbo.OrderTotal FROM DECIMAL(9,2) NOT NULL`) hashes both the schema-qualified alias name and its underlying base type/length/precision/scale/nullability, so dropping and recreating the alias with a different base type changes the hash
 
 ### Excluded Objects
 
@@ -159,7 +177,18 @@ This composes additively with any names you put in `ObjectNamesToIgnore`. A bare
 
 ### Not Yet Captured
 
-Extraction currently covers tables, stored procedures (`type = 'P'`), and user-defined table types. The following object types are **not** read, so adding or altering them does not change the hash: views, scalar/table-valued functions, triggers, sequences, and synonyms. Broadening object-type coverage is a planned follow-up.
+The following are **not** read, so adding, altering, or dropping them does not change the hash:
+
+- **CLR modules and scalar CLR UDTs**: CLR functions/triggers/aggregates and scalar CLR user-defined types are out of scope — hashing a compiled binary body is a fundamentally different extraction shape than everything else this library captures.
+- **DDL and server-scoped triggers**: only object (DML) triggers on tables and views are captured; database-scoped DDL triggers and server-scoped triggers are not.
+- **Partitioning and filegroup/data-space placement**: moving a table to a different filegroup, or repartitioning it, does not change the hash.
+- **Encrypted module bodies**: two different `WITH ENCRYPTION` modules (procedures, views, functions, or triggers) with identical signatures collide on a shared `<encrypted>` sentinel — inherent, since the body is unreadable once encrypted.
+
+See the [FAQ](https://github.com/zachtbeer-labs/sqlschemahasher/wiki/FAQ) for the reasoning behind these scope decisions and other frequently-asked design questions.
+
+### Known limitation: definition-text rendering drift
+
+CHECK constraint, DEFAULT constraint, computed-column, and filtered-index definitions are hashed as SQL Server renders them. Different SQL Server major versions can render the same expression differently (spacing, parenthesization, casing of built-in functions), which can produce a spurious `Different` comparison across server versions even though nothing semantically changed. Compare hashes taken from the same SQL Server major version to avoid this. See `BUGS.md` for details — this is intentionally not normalized in v2.
 
 ## Presets
 
@@ -258,7 +287,7 @@ var beforeHash = await SqlSchemaHash.GetHashAsync(connectionString);
 // ... apply migration ...
 var afterHash = await SqlSchemaHash.GetHashAsync(connectionString);
 
-if (beforeHash != afterHash)
+if (SchemaHashResult.Compare(beforeHash, afterHash) != SchemaHashComparison.Equal)
 {
     Console.WriteLine("Schema changed!");
 }
@@ -289,7 +318,7 @@ foreach (var db in databases)
 var prodHash = await SqlSchemaHash.GetHashAsync(prodConnectionString);
 var stagingHash = await SqlSchemaHash.GetHashAsync(stagingConnectionString);
 
-if (prodHash != stagingHash)
+if (SchemaHashResult.Compare(prodHash, stagingHash) != SchemaHashComparison.Equal)
 {
     throw new Exception("Staging schema does not match production!");
 }
@@ -303,6 +332,8 @@ if (prodHash != stagingHash)
 ## Project Status
 
 Stable and published on [NuGet.org](https://www.nuget.org/packages/zachtbeer.SqlSchemaHasher). See the [CHANGELOG](CHANGELOG.md) for release history.
+
+> **v2.0.0 is currently in preparation and unreleased.** The badges above and the package on NuGet.org reflect the latest *published* release; this document's "What Gets Hashed" section describes the code in this repository, which may be ahead of what's published.
 
 ## Maintainers
 
@@ -321,7 +352,9 @@ gh attestation verify zachtbeer.SqlSchemaHasher.<version>.nupkg \
 ## Running Tests
 
 ```bash
-dotnet test SqlSchemaHasher.sln
+dotnet test tests/SqlSchemaHash.UnitTests          # fast, no database required
+dotnet test tests/SqlSchemaHash.IntegrationTests   # requires Docker
+dotnet test SqlSchemaHasher.sln                    # runs both
 ```
 
 Integration tests use [Testcontainers](https://testcontainers.com/) to spin up SQL Server 2025 in Docker, so Docker must be running.

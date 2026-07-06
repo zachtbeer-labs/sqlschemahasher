@@ -69,4 +69,21 @@ public class TableTypeFidelityTests : IntegrationTestBase
         var udt = (await ExtractSchemaAsync(db1Name)).UserDefinedTableTypes.Single(u => u.Name == "Rows");
         udt.IdentityColumn.ShouldBe("Id", "A table type's identity column must be captured");
     }
+
+    [TestMethod]
+    public async Task UserDefinedTableType_AliasColumn_DifferentBaseType_ChangesHash()
+    {
+        // Table-type columns flow through the same column extraction as table columns, so bug #8's
+        // fix (capturing an alias scalar type's underlying base type) must apply here too.
+        var decimalDbName = await CreateTestDatabaseAsync("UdttAliasBase1");
+        var bigintDbName = await CreateTestDatabaseAsync("UdttAliasBase2");
+
+        await ExecuteSqlAsync(decimalDbName, "CREATE TYPE dbo.OrderTotal FROM DECIMAL(9,2) NOT NULL");
+        await ExecuteSqlAsync(decimalDbName, "CREATE TYPE dbo.Totals AS TABLE (Total dbo.OrderTotal NOT NULL)");
+
+        await ExecuteSqlAsync(bigintDbName, "CREATE TYPE dbo.OrderTotal FROM BIGINT NOT NULL");
+        await ExecuteSqlAsync(bigintDbName, "CREATE TYPE dbo.Totals AS TABLE (Total dbo.OrderTotal NOT NULL)");
+
+        (await ExtractAndHashAsync(decimalDbName)).ShouldNotBe(await ExtractAndHashAsync(bigintDbName), "A table type's alias-typed column recreated over a different base type must change the hash");
+    }
 }

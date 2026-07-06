@@ -17,6 +17,16 @@ public class ScopingTests : MatrixTestBase
         s.StoredProcedures.Any(p => p.SchemaName == schema && p.Name == name);
     private static bool HasUdt(SchemaMetadata s, string schema, string name) =>
         s.UserDefinedTableTypes.Any(u => u.SchemaName == schema && u.Name == name);
+    private static bool HasView(SchemaMetadata s, string schema, string name) =>
+        s.Views.Any(v => v.SchemaName == schema && v.Name == name);
+    private static bool HasFunction(SchemaMetadata s, string schema, string name) =>
+        s.Functions.Any(f => f.SchemaName == schema && f.Name == name);
+    private static bool HasTrigger(SchemaMetadata s, string schema, string name) =>
+        s.Triggers.Any(t => t.SchemaName == schema && t.Name == name);
+    private static bool HasSequence(SchemaMetadata s, string schema, string name) =>
+        s.Sequences.Any(sq => sq.SchemaName == schema && sq.Name == name);
+    private static bool HasSynonym(SchemaMetadata s, string schema, string name) =>
+        s.Synonyms.Any(sy => sy.SchemaName == schema && sy.Name == name);
 
     // Two-schema fixture with a table, a procedure and a table type in each of dbo and sales.
     private static readonly string[] TwoSchemaObjects =
@@ -257,5 +267,119 @@ public class ScopingTests : MatrixTestBase
 
         schema.UserDefinedTableTypes.Any(u => u.Name.Equals("IgnoredType", StringComparison.OrdinalIgnoreCase)).ShouldBeFalse("A UDT named in ObjectNamesToIgnore must be excluded, consistent with tables and procedures");
         schema.UserDefinedTableTypes.Any(u => u.Name.Equals("KeptType", StringComparison.OrdinalIgnoreCase)).ShouldBeTrue("Unrelated UDTs must still be extracted");
+    }
+
+    // ── New object kinds (views/functions/triggers/sequences/synonyms) ─────────────────────────────
+
+    [TestMethod]
+    public async Task ObjectNamesToIgnore_ExcludesEachNewObjectKind_BareName()
+    {
+        var dbName = await CreateDatabaseWithAsync("ignoreNewKinds",
+            "CREATE TABLE dbo.T (Id INT NOT NULL)",
+            "CREATE VIEW dbo.KeepView AS SELECT Id FROM dbo.T",
+            "CREATE VIEW dbo.DropView AS SELECT Id FROM dbo.T",
+            "CREATE FUNCTION dbo.KeepFunc() RETURNS INT AS BEGIN RETURN 1 END",
+            "CREATE FUNCTION dbo.DropFunc() RETURNS INT AS BEGIN RETURN 1 END",
+            "CREATE TRIGGER KeepTrigger ON dbo.T AFTER INSERT AS BEGIN SET NOCOUNT ON END",
+            "CREATE TRIGGER DropTrigger ON dbo.T AFTER UPDATE AS BEGIN SET NOCOUNT ON END",
+            "CREATE SEQUENCE dbo.KeepSeq AS INT START WITH 1",
+            "CREATE SEQUENCE dbo.DropSeq AS INT START WITH 1",
+            "CREATE SYNONYM dbo.KeepSyn FOR dbo.T",
+            "CREATE SYNONYM dbo.DropSyn FOR dbo.T");
+
+        var options = new SchemaHashOptions { ObjectNamesToIgnore = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "DropView", "DropFunc", "DropTrigger", "DropSeq", "DropSyn" } };
+        var schema = await ExtractSchemaAsync(dbName, options);
+
+        HasView(schema, "dbo", "KeepView").ShouldBeTrue();
+        HasView(schema, "dbo", "DropView").ShouldBeFalse("A view named in ObjectNamesToIgnore is excluded");
+        HasFunction(schema, "dbo", "KeepFunc").ShouldBeTrue();
+        HasFunction(schema, "dbo", "DropFunc").ShouldBeFalse("A function named in ObjectNamesToIgnore is excluded");
+        HasTrigger(schema, "dbo", "KeepTrigger").ShouldBeTrue();
+        HasTrigger(schema, "dbo", "DropTrigger").ShouldBeFalse("A trigger named in ObjectNamesToIgnore is excluded");
+        HasSequence(schema, "dbo", "KeepSeq").ShouldBeTrue();
+        HasSequence(schema, "dbo", "DropSeq").ShouldBeFalse("A sequence named in ObjectNamesToIgnore is excluded");
+        HasSynonym(schema, "dbo", "KeepSyn").ShouldBeTrue();
+        HasSynonym(schema, "dbo", "DropSyn").ShouldBeFalse("A synonym named in ObjectNamesToIgnore is excluded");
+    }
+
+    [TestMethod]
+    public async Task ObjectNamesToIgnore_SchemaQualified_TargetsSingleSchema_ForNewObjectKinds()
+    {
+        var dbName = await CreateDatabaseWithAsync("ignoreQualifiedNewKinds",
+            "CREATE SCHEMA sales",
+            "CREATE TABLE dbo.T (Id INT NOT NULL)",
+            "CREATE TABLE sales.T (Id INT NOT NULL)",
+            "CREATE VIEW dbo.SameView AS SELECT Id FROM dbo.T",
+            "CREATE VIEW sales.SameView AS SELECT Id FROM sales.T");
+
+        var options = new SchemaHashOptions { ObjectNamesToIgnore = new HashSet<string> { "sales.SameView" } };
+        var schema = await ExtractSchemaAsync(dbName, options);
+
+        HasView(schema, "dbo", "SameView").ShouldBeTrue("A schema-qualified entry must not affect another schema's same-named view");
+        HasView(schema, "sales", "SameView").ShouldBeFalse("A schema-qualified entry excludes only that schema's view");
+    }
+
+    [TestMethod]
+    public async Task SchemaFilter_ControlsInclusion_AcrossNewObjectKinds()
+    {
+        var dbName = await CreateDatabaseWithAsync("filterNewKinds",
+            "CREATE SCHEMA sales",
+            "CREATE TABLE dbo.T (Id INT NOT NULL)",
+            "CREATE TABLE sales.T (Id INT NOT NULL)",
+            "CREATE VIEW dbo.V AS SELECT Id FROM dbo.T",
+            "CREATE VIEW sales.V AS SELECT Id FROM sales.T",
+            "CREATE FUNCTION dbo.F() RETURNS INT AS BEGIN RETURN 1 END",
+            "CREATE FUNCTION sales.F() RETURNS INT AS BEGIN RETURN 1 END",
+            "CREATE TRIGGER TrigDbo ON dbo.T AFTER INSERT AS BEGIN SET NOCOUNT ON END",
+            "CREATE TRIGGER TrigSales ON sales.T AFTER INSERT AS BEGIN SET NOCOUNT ON END",
+            "CREATE SEQUENCE dbo.Seq AS INT START WITH 1",
+            "CREATE SEQUENCE sales.Seq AS INT START WITH 1",
+            "CREATE SYNONYM dbo.Syn FOR dbo.T",
+            "CREATE SYNONYM sales.Syn FOR sales.T");
+
+        var salesOnly = await ExtractSchemaAsync(dbName, new SchemaHashOptions { SchemaFilter = "sales" });
+
+        HasView(salesOnly, "sales", "V").ShouldBeTrue();
+        HasView(salesOnly, "dbo", "V").ShouldBeFalse();
+        HasFunction(salesOnly, "sales", "F").ShouldBeTrue();
+        HasFunction(salesOnly, "dbo", "F").ShouldBeFalse();
+        HasTrigger(salesOnly, "sales", "TrigSales").ShouldBeTrue();
+        HasTrigger(salesOnly, "dbo", "TrigDbo").ShouldBeFalse();
+        HasSequence(salesOnly, "sales", "Seq").ShouldBeTrue();
+        HasSequence(salesOnly, "dbo", "Seq").ShouldBeFalse();
+        HasSynonym(salesOnly, "sales", "Syn").ShouldBeTrue();
+        HasSynonym(salesOnly, "dbo", "Syn").ShouldBeFalse();
+    }
+
+    [TestMethod]
+    public async Task SchemaFilter_ControlsInclusion_ForExtendedProperties()
+    {
+        var dbName = await CreateDatabaseWithAsync("filterExtProps",
+            "CREATE SCHEMA sales",
+            "CREATE TABLE dbo.T (Id INT NOT NULL)",
+            "CREATE TABLE sales.T (Id INT NOT NULL)",
+            "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'dbo table', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'T'",
+            "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'sales table', @level0type = N'SCHEMA', @level0name = N'sales', @level1type = N'TABLE', @level1name = N'T'",
+            "EXEC sys.sp_addextendedproperty @name = N'AppVersion', @value = N'1.0'");
+
+        var salesOnly = await ExtractSchemaAsync(dbName, new SchemaHashOptions { SchemaFilter = "sales" });
+
+        salesOnly.ExtendedProperties.ShouldHaveSingleItem("Only the filtered schema's property survives; a database-scoped property has no schema and falls outside any schema filter");
+        salesOnly.ExtendedProperties.Single().Value.ShouldBe("sales table");
+    }
+
+    [TestMethod]
+    public async Task IgnoreSysDiagramObjects_ExcludesFnDiagramObjectsFunction()
+    {
+        var dbName = await CreateDatabaseWithAsync("diagramFunc",
+            "CREATE FUNCTION dbo.fn_diagramobjects() RETURNS INT AS BEGIN RETURN 1 END",
+            "CREATE FUNCTION dbo.RealFunc() RETURNS INT AS BEGIN RETURN 1 END");
+
+        var withToggle = await ExtractSchemaAsync(dbName, new SchemaHashOptions { IgnoreSysDiagramObjects = true });
+        HasFunction(withToggle, "dbo", "RealFunc").ShouldBeTrue("A normal function is retained");
+        HasFunction(withToggle, "dbo", "fn_diagramobjects").ShouldBeFalse("fn_diagramobjects is now actually excluded now that functions are extracted");
+
+        var defaultOptions = await ExtractSchemaAsync(dbName, Strict);
+        HasFunction(defaultOptions, "dbo", "fn_diagramobjects").ShouldBeTrue("The toggle is off by default, so fn_diagramobjects is NOT excluded");
     }
 }

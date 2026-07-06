@@ -14,7 +14,8 @@ namespace zachtbeer.SqlSchemaHasher;
 /// presets (<see cref="V1"/>, <see cref="V2"/>, <see cref="Structural"/>) for common configurations.
 ///
 /// Object <em>scoping</em> (which objects are compared at all) is separate from the normalization
-/// enums: see <see cref="SchemaFilter"/>, <see cref="ObjectNamesToIgnore"/>, <see cref="IgnoreSysDiagramObjects"/>.
+/// enums: see <see cref="SchemaFilter"/>, <see cref="ObjectNamesToIgnore"/>, <see cref="IgnoreSysDiagramObjects"/>,
+/// <see cref="IgnoreExtendedProperties"/>.
 /// </summary>
 public sealed class SchemaHashOptions
 {
@@ -124,6 +125,15 @@ public sealed class SchemaHashOptions
 	/// Default: false. Enabled by all presets (<see cref="V1"/>, <see cref="V2"/>, <see cref="Structural"/>).
 	/// </summary>
 	public bool IgnoreSysDiagramObjects { get; set; } = false;
+
+	/// <summary>
+	/// When true, extended properties (<c>sys.extended_properties</c>, e.g. <c>MS_Description</c>) are
+	/// not extracted and do not affect the hash. Default: false — they are compared exactly, matching
+	/// the everything-exact baseline; two databases differing only in an extended property (name, value,
+	/// or value type) hash differently. No preset sets this: opt in if you consider extended properties
+	/// documentation noise rather than schema.
+	/// </summary>
+	public bool IgnoreExtendedProperties { get; set; } = false;
 
 	/// <summary>
 	/// Filter to include only objects from specific schema(s).

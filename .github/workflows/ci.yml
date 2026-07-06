@@ -30,7 +30,7 @@ jobs:
 
     - run: dotnet restore SqlSchemaHasher.sln --locked-mode
     - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
-    - run: dotnet test SqlSchemaHasher.sln -c Release --no-build --verbosity normal
+    - run: dotnet test tests/SqlSchemaHash.UnitTests/SqlSchemaHash.UnitTests.csproj -c Release --no-build --verbosity normal
     - run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./artifacts
 
   integration:

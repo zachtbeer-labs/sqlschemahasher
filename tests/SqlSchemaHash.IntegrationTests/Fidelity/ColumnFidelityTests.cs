@@ -83,8 +83,50 @@ public class ColumnFidelityTests : IntegrationTestBase
         await ExecuteSqlAsync(dbName, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Amt dbo.Money2 NULL)");
 
         var columns = (await ExtractSchemaAsync(dbName)).Tables.Single(t => t.Name == "T").Columns;
-        columns.Single(c => c.Name == "Amt").DataType.ShouldBe("dbo.Money2", "A user-defined type must be schema-qualified");
+        columns.Single(c => c.Name == "Amt").DataType.ShouldBe("dbo.Money2{decimal(9,2) NULL}", "A user-defined type must be schema-qualified and carry its underlying base type");
         columns.Single(c => c.Name == "Id").DataType.ShouldBe("int", "A built-in type must remain a bare name");
+    }
+
+    [TestMethod]
+    public async Task Column_AliasType_DifferentBaseType_ChangesHash_SameBaseType_SameHash()
+    {
+        // Bug #8: an alias scalar type's underlying base type was never captured, so dropping and
+        // recreating the same alias name over a different base type left the hash unchanged.
+        var decimalDbName = await CreateTestDatabaseAsync("AliasBase1");
+        var bigintDbName = await CreateTestDatabaseAsync("AliasBase2");
+        var decimalDb2Name = await CreateTestDatabaseAsync("AliasBase3");
+
+        await ExecuteSqlAsync(decimalDbName, "CREATE TYPE dbo.OrderTotal FROM DECIMAL(9,2) NOT NULL");
+        await ExecuteSqlAsync(decimalDbName, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Total dbo.OrderTotal NOT NULL)");
+
+        await ExecuteSqlAsync(bigintDbName, "CREATE TYPE dbo.OrderTotal FROM BIGINT NOT NULL");
+        await ExecuteSqlAsync(bigintDbName, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Total dbo.OrderTotal NOT NULL)");
+
+        await ExecuteSqlAsync(decimalDb2Name, "CREATE TYPE dbo.OrderTotal FROM DECIMAL(9,2) NOT NULL");
+        await ExecuteSqlAsync(decimalDb2Name, "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Total dbo.OrderTotal NOT NULL)");
+
+        var decimalHash = await ExtractAndHashAsync(decimalDbName);
+        var bigintHash = await ExtractAndHashAsync(bigintDbName);
+        var decimalHash2 = await ExtractAndHashAsync(decimalDb2Name);
+
+        decimalHash.ShouldNotBe(bigintHash, "Recreating the same alias name over a different underlying base type must change the hash");
+        decimalHash.ShouldBe(decimalHash2, "Two databases with an identical alias type definition must hash identically");
+    }
+
+    [TestMethod]
+    public async Task StoredProcedureParameter_AliasType_DifferentBaseType_ChangesHash()
+    {
+        // The same bug #8 gap applied to procedure parameters typed with an alias scalar type.
+        var decimalDbName = await CreateTestDatabaseAsync("ParamAliasBase1");
+        var bigintDbName = await CreateTestDatabaseAsync("ParamAliasBase2");
+
+        await ExecuteSqlAsync(decimalDbName, "CREATE TYPE dbo.OrderTotal FROM DECIMAL(9,2) NOT NULL");
+        await ExecuteSqlAsync(decimalDbName, "CREATE PROCEDURE dbo.SetTotal @Total dbo.OrderTotal AS BEGIN SET NOCOUNT ON; END");
+
+        await ExecuteSqlAsync(bigintDbName, "CREATE TYPE dbo.OrderTotal FROM BIGINT NOT NULL");
+        await ExecuteSqlAsync(bigintDbName, "CREATE PROCEDURE dbo.SetTotal @Total dbo.OrderTotal AS BEGIN SET NOCOUNT ON; END");
+
+        (await ExtractAndHashAsync(decimalDbName)).ShouldNotBe(await ExtractAndHashAsync(bigintDbName), "A parameter's alias type recreated over a different base type must change the hash");
     }
 
     [TestMethod]

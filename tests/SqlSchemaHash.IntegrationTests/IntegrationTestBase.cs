@@ -79,6 +79,15 @@ public abstract class IntegrationTestBase
     }
 
     /// <summary>
+    /// Adds a MEMORY_OPTIMIZED_DATA filegroup to a test database so it can host memory-optimized tables.
+    /// Must be called before creating any memory-optimized table in that database.
+    /// </summary>
+    protected static async Task EnableMemoryOptimizedAsync(string dbName)
+    {
+        await DatabaseTestHelpers.EnableMemoryOptimizedAsync(dbName);
+    }
+
+    /// <summary>
     /// Extracts schema metadata for inspection.
     /// </summary>
     protected static async Task<SchemaMetadata> ExtractSchemaAsync(string dbName, SchemaHashOptions? options = null)
