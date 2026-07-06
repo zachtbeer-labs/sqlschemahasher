@@ -187,4 +187,75 @@ public class ScopingTests : MatrixTestBase
         var defaultOptions = await ExtractSchemaAsync(dbName, Strict);
         HasProc(defaultOptions, "dbo", "sp_creatediagram").ShouldBeTrue("The toggle is off by default, so diagram helper procs are NOT excluded");
     }
+
+    // ── sysdiagrams table + additive composition with the user ignore set ─────────────────────────
+
+    [TestMethod]
+    public async Task SysDiagrams_Table_IgnoredOnlyWhenToggleSet()
+    {
+        var db1Name = await CreateTestDatabaseAsync("Diagrams1");
+        var db2Name = await CreateTestDatabaseAsync("Diagrams2");
+
+        const string tableSql = "CREATE TABLE Assets (Id INT NOT NULL CONSTRAINT PK_Assets PRIMARY KEY)";
+        await ExecuteSqlAsync(db1Name, tableSql);
+        await ExecuteSqlAsync(db2Name, tableSql);
+
+        await ExecuteSqlAsync(db1Name, @"
+            CREATE TABLE sysdiagrams (
+                name sysname NOT NULL,
+                principal_id int NOT NULL,
+                diagram_id int IDENTITY(1,1) PRIMARY KEY,
+                version int,
+                definition varbinary(max)
+            )");
+
+        var ignoreOptions = new SchemaHashOptions { IgnoreSysDiagramObjects = true };
+        var neutralOptions = new SchemaHashOptions();
+
+        (await ExtractAndHashAsync(db1Name, ignoreOptions)).ShouldBe(await ExtractAndHashAsync(db2Name, ignoreOptions), "IgnoreSysDiagramObjects must exclude the sysdiagrams table from the hash");
+        (await ExtractAndHashAsync(db1Name, neutralOptions)).ShouldNotBe(await ExtractAndHashAsync(db2Name, neutralOptions), "The neutral baseline excludes nothing, so the sysdiagrams table must affect the hash");
+
+        var schema = await ExtractSchemaAsync(db1Name, ignoreOptions);
+        schema.Tables.Any(t => t.Name.Equals("sysdiagrams", StringComparison.OrdinalIgnoreCase)).ShouldBeFalse("sysdiagrams must be omitted from extraction when the toggle is set");
+    }
+
+    [TestMethod]
+    public async Task IgnoreSysDiagramObjects_ComposesWithUserIgnoreSet()
+    {
+        var dbName = await CreateTestDatabaseAsync("DiagramsCompose");
+
+        await ExecuteSqlAsync(dbName, "CREATE TABLE Assets (Id INT NOT NULL CONSTRAINT PK_Assets PRIMARY KEY)");
+        await ExecuteSqlAsync(dbName, "CREATE TABLE MyTable (Id INT NOT NULL CONSTRAINT PK_MyTable PRIMARY KEY)");
+        await ExecuteSqlAsync(dbName, @"
+            CREATE TABLE sysdiagrams (
+                name sysname NOT NULL,
+                principal_id int NOT NULL,
+                diagram_id int IDENTITY(1,1) PRIMARY KEY,
+                version int,
+                definition varbinary(max)
+            )");
+
+        var options = new SchemaHashOptions { ObjectNamesToIgnore = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MyTable" }, IgnoreSysDiagramObjects = true };
+        var schema = await ExtractSchemaAsync(dbName, options);
+
+        schema.Tables.Any(t => t.Name.Equals("MyTable", StringComparison.OrdinalIgnoreCase)).ShouldBeFalse("A user-supplied ignore set must still apply alongside the diagram toggle");
+        schema.Tables.Any(t => t.Name.Equals("sysdiagrams", StringComparison.OrdinalIgnoreCase)).ShouldBeFalse("Diagram exclusions must compose additively with the user-supplied ignore set");
+        schema.Tables.Any(t => t.Name.Equals("Assets", StringComparison.OrdinalIgnoreCase)).ShouldBeTrue("Unrelated tables must still be extracted");
+    }
+
+    [TestMethod]
+    public async Task UserDefinedTableType_IsExcluded_WhenInObjectNamesToIgnore()
+    {
+        // UDT extraction must honor ObjectNamesToIgnore, consistent with tables and procedures.
+        var dbName = await CreateTestDatabaseAsync("UdtIgnore");
+
+        await ExecuteSqlAsync(dbName, "CREATE TYPE dbo.IgnoredType AS TABLE (Id INT NOT NULL)");
+        await ExecuteSqlAsync(dbName, "CREATE TYPE dbo.KeptType AS TABLE (Id INT NOT NULL)");
+
+        var options = new SchemaHashOptions { ObjectNamesToIgnore = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "IgnoredType" } };
+        var schema = await ExtractSchemaAsync(dbName, options);
+
+        schema.UserDefinedTableTypes.Any(u => u.Name.Equals("IgnoredType", StringComparison.OrdinalIgnoreCase)).ShouldBeFalse("A UDT named in ObjectNamesToIgnore must be excluded, consistent with tables and procedures");
+        schema.UserDefinedTableTypes.Any(u => u.Name.Equals("KeptType", StringComparison.OrdinalIgnoreCase)).ShouldBeTrue("Unrelated UDTs must still be extracted");
+    }
 }

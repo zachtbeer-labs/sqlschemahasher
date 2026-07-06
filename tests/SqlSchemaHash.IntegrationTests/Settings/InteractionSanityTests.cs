@@ -73,4 +73,26 @@ public class InteractionSanityTests : MatrixTestBase
         Hash(baseline, combo).ShouldBe(Hash(bothLoosened, combo), "Both OR'd bits collapse together (fill factor AND lock options)");
         Hash(baseline, combo).ShouldNotBe(Hash(disabled, combo), "A bit that is NOT in the combo (IgnoreDisabled) still participates");
     }
+
+    [TestMethod]
+    public async Task CheckConstraint_Disabled_CollapsesOnlyUnderIgnoreDisabledAndTrust()
+    {
+        // Disabling a CHECK sets BOTH is_disabled and is_not_trusted (a disabled constraint is inherently
+        // untrusted), so neither bit alone collapses the difference — both are required.
+        var db1 = await CreateTestDatabaseAsync("CkDisabled1");
+        var db2 = await CreateTestDatabaseAsync("CkDisabled2");
+
+        const string tableSql = "CREATE TABLE T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, Age INT NOT NULL, CONSTRAINT CK_Age CHECK (Age > 0))";
+        await ExecuteSqlAsync(db1, tableSql);
+        await ExecuteSqlAsync(db2, tableSql);
+        await ExecuteSqlAsync(db1, "ALTER TABLE T NOCHECK CONSTRAINT CK_Age");
+
+        (await ExtractAndHashAsync(db1)).ShouldNotBe(await ExtractAndHashAsync(db2), "A disabled CHECK differs under the exact baseline");
+
+        var disabledOnly = new SchemaHashOptions { Constraints = ConstraintNormalization.IgnoreDisabled };
+        (await ExtractAndHashAsync(db1, disabledOnly)).ShouldNotBe(await ExtractAndHashAsync(db2, disabledOnly), "IgnoreDisabled alone leaves the coupled untrusted flag differing");
+
+        var both = new SchemaHashOptions { Constraints = ConstraintNormalization.IgnoreDisabled | ConstraintNormalization.IgnoreTrust };
+        (await ExtractAndHashAsync(db1, both)).ShouldBe(await ExtractAndHashAsync(db2, both), "IgnoreDisabled | IgnoreTrust must collapse a disabled CHECK");
+    }
 }
