@@ -354,6 +354,11 @@ internal sealed class SchemaExtractor
 		// for table names containing dots. For a system-versioned table, history_table_id links to its
 		// history table; it is resolved to a schema-qualified name here and normalized by the calculator
 		// (an unnamed history table gets an object_id-derived name that is not deterministic across DBs).
+		// The reverse join (pt.history_table_id = t.object_id) identifies, for a history table itself,
+		// the versioned parent table it belongs to; the calculator uses that linkage to derive an
+		// effective name for an auto-named history table (and its auto-created index) instead of the
+		// raw object_id-suffixed name. The join cannot fan out: at most one table references a given
+		// history table.
 		string tablesQuery = $@"
 			SELECT
 				t.object_id AS ObjectId,
@@ -367,14 +372,17 @@ internal sealed class SchemaExtractor
 				t.is_memory_optimized AS IsMemoryOptimized,
 				t.durability_desc AS DurabilityDesc,
 				CASE WHEN t.history_table_id IS NOT NULL THEN SCHEMA_NAME(ht.schema_id) + '.' + ht.name ELSE NULL END AS HistoryTableName,
+				SCHEMA_NAME(pt.schema_id) AS VersionedParentSchema,
+				pt.name AS VersionedParentName,
 				{retentionSelect}
 			FROM sys.tables t
 			LEFT JOIN sys.identity_columns idc ON idc.object_id = t.object_id
 			LEFT JOIN sys.tables ht ON t.history_table_id = ht.object_id
+			LEFT JOIN sys.tables pt ON pt.history_table_id = t.object_id
 			WHERE t.type = 'U'
 			ORDER BY SchemaName, t.name";
 
-		var tableInfos = (await connection.QueryAsync<(int ObjectId, string SchemaName, string TableName, string? IdentityColumn, string? IdentitySeed, string? IdentityIncrement, bool IdentityNotForReplication, string? TemporalType, bool IsMemoryOptimized, string? DurabilityDesc, string? HistoryTableName, int? HistoryRetentionPeriod, string? HistoryRetentionPeriodUnit)>(new CommandDefinition(tablesQuery, cancellationToken: cancellationToken)))
+		var tableInfos = (await connection.QueryAsync<(int ObjectId, string SchemaName, string TableName, string? IdentityColumn, string? IdentitySeed, string? IdentityIncrement, bool IdentityNotForReplication, string? TemporalType, bool IsMemoryOptimized, string? DurabilityDesc, string? HistoryTableName, string? VersionedParentSchema, string? VersionedParentName, int? HistoryRetentionPeriod, string? HistoryRetentionPeriodUnit)>(new CommandDefinition(tablesQuery, cancellationToken: cancellationToken)))
 			.Where(t => !isIgnored(t.SchemaName, t.TableName))
 			.ToList();
 
@@ -399,7 +407,9 @@ internal sealed class SchemaExtractor
 				info.DurabilityDesc,
 				info.HistoryTableName,
 				info.HistoryRetentionPeriod,
-				info.HistoryRetentionPeriodUnit));
+				info.HistoryRetentionPeriodUnit,
+				info.VersionedParentSchema,
+				info.VersionedParentName));
 		}
 
 		return tables.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal).ToList();

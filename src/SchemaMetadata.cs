@@ -20,11 +20,18 @@ public sealed record SchemaMetadata(List<TableSchema> Tables, List<StoredProcedu
 /// the NOT FOR REPLICATION flag. All three are null/false when there is no identity column.
 /// For a system-versioned temporal table, HistoryTableName is the schema-qualified name of its
 /// history table (the calculator normalizes SQL Server's auto-generated MSSQL_TemporalHistoryFor_&lt;id&gt;
-/// names, whose object-id suffix is not deterministic across databases); HistoryRetentionPeriod and
-/// HistoryRetentionPeriodUnit carry a finite retention policy (e.g. 6 / "MONTH"), both null for the
-/// INFINITE default or on servers without retention support. All are null for non-temporal tables.
+/// names, whose object-id suffix is not deterministic across databases, into a name derived from the
+/// versioned parent instead); HistoryRetentionPeriod and HistoryRetentionPeriodUnit carry a finite
+/// retention policy (e.g. 6 / "MONTH"), both null for the INFINITE default or on servers without
+/// retention support. All are null for non-temporal tables.
+/// VersionedParentSchema/VersionedParentName are populated only on a history table itself (any
+/// TemporalType of "HISTORY_TABLE", whether the history table was named explicitly or left anonymous):
+/// they identify the versioned table this one stores history for (the reverse of HistoryTableName's
+/// linkage). Both null for every other table, including the versioned table itself. The raw catalog
+/// Name is always preserved here — the calculator, not the extractor, substitutes an effective name
+/// for an auto-named history table and its auto-created index.
 /// </summary>
-public sealed record TableSchema(string SchemaName, string Name, List<ColumnSchema> Columns, List<IndexSchema> Indexes, List<KeyConstraintSchema> KeyConstraints, List<ForeignKeyConstraintSchema> ForeignKeys, List<CheckConstraintSchema> CheckConstraints, List<DefaultConstraintSchema> DefaultConstraints, string? IdentityColumn, string? IdentitySeed = null, string? IdentityIncrement = null, bool IdentityNotForReplication = false, string? TemporalType = null, bool IsMemoryOptimized = false, string? DurabilityDesc = null, string? HistoryTableName = null, int? HistoryRetentionPeriod = null, string? HistoryRetentionPeriodUnit = null)
+public sealed record TableSchema(string SchemaName, string Name, List<ColumnSchema> Columns, List<IndexSchema> Indexes, List<KeyConstraintSchema> KeyConstraints, List<ForeignKeyConstraintSchema> ForeignKeys, List<CheckConstraintSchema> CheckConstraints, List<DefaultConstraintSchema> DefaultConstraints, string? IdentityColumn, string? IdentitySeed = null, string? IdentityIncrement = null, bool IdentityNotForReplication = false, string? TemporalType = null, bool IsMemoryOptimized = false, string? DurabilityDesc = null, string? HistoryTableName = null, int? HistoryRetentionPeriod = null, string? HistoryRetentionPeriodUnit = null, string? VersionedParentSchema = null, string? VersionedParentName = null)
 {
 	/// <summary>
 	/// Returns the fully-qualified name in [schema].[name] format.

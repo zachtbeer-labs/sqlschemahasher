@@ -39,8 +39,35 @@ identical signatures collide on the `<encrypted>` sentinel used in place of a de
 inherent — the module body is unreadable server-side once encrypted, so there is no signal available
 to distinguish them.
 
+### Orphaned ex-history tables
+
+After `ALTER TABLE ... SET (SYSTEM_VERSIONING = OFF)`, an anonymous history table
+(`MSSQL_TemporalHistoryFor_<object_id>`) is left behind as an ordinary table — `temporal_type` reverts to
+`NON_TEMPORAL_TABLE`, so `SchemaHashCalculator.EffectiveTableName`'s guard no longer fires and the
+table's raw, non-deterministic name hashes exactly. At that point it genuinely is an ordinary table
+whose physical name is real schema, so this is accepted rather than treated as a bug. **Workaround:**
+rename the orphaned table, or add it to `ObjectNamesToIgnore`.
+
+### Extended properties on an anonymous history table
+
+An extended property targeting an anonymous temporal history table resolves `ObjectName` to the table's
+raw, non-deterministic `MSSQL_TemporalHistoryFor_<object_id>` name — `EffectiveTableName`'s normalization
+applies only to `TableSchema.Name`, not to `ExtendedPropertySchema.ObjectName`. Rare enough (extended
+properties are seldom attached to an auto-named history table rather than its versioned parent) not to
+warrant the extra parent join in the extended-property query now; revisit if reported.
+
 ## Resolved in v2
 
+- **Anonymous temporal history table/index names leaked `object_id`** — a system-versioned table
+  created without an explicit `HISTORY_TABLE` gets an auto-named history table
+  (`MSSQL_TemporalHistoryFor_<object_id>`) and auto-created clustered index
+  (`ix_MSSQL_TemporalHistoryFor_<object_id>`), both embedding a per-database object_id that previously
+  hashed raw, so two databases built from identical DDL compared as `Different` under every preset.
+  `SchemaHashCalculator.EffectiveTableName`/`HistoryIndexNameRewrite` now substitute a name derived from
+  the versioned parent (captured via a new `sys.tables` reverse join exposed as
+  `TableSchema.VersionedParentSchema`/`VersionedParentName`), unconditionally — an explicitly-named
+  history table is unaffected. See `Fidelity/TemporalHistoryTableFidelityTests` and
+  `Determinism/TemporalHistoryTableNormalizationTests`.
 - **Object-coverage expansion** — extraction and hashing now cover views (including indexed-view
   indexes), T-SQL functions (scalar, inline TVF, multi-statement TVF, with return type captured even
   under `IgnoreBodyText`), DML triggers (including FIRST/LAST ordering and the excluded-parent-excludes-
