@@ -49,19 +49,22 @@ internal sealed class SchemaHashCalculator
         // Hash tables in sorted order by fully-qualified name.
         // All sorts use ordinal comparison: culture-sensitive sorting would make the
         // hash depend on the machine's culture and ICU version.
-        foreach (var table in schema.Tables.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => EffectiveTableName(t), StringComparer.Ordinal))
+        var sortedTables = schema.Tables.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => EffectiveTableName(t), StringComparer.Ordinal);
+        foreach (var table in sortedTables)
         {
             HashTable(hasher, table);
         }
 
         // Hash stored procedures in sorted order by fully-qualified name
-        foreach (var proc in schema.StoredProcedures.OrderBy(p => p.SchemaName, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal))
+        var sortedProcedures = schema.StoredProcedures.OrderBy(p => p.SchemaName, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal);
+        foreach (var proc in sortedProcedures)
         {
             HashStoredProcedure(hasher, proc);
         }
 
         // Hash user-defined table types in sorted order by fully-qualified name
-        foreach (var udt in schema.UserDefinedTableTypes.OrderBy(u => u.SchemaName, StringComparer.Ordinal).ThenBy(u => u.Name, StringComparer.Ordinal))
+        var sortedTableTypes = schema.UserDefinedTableTypes.OrderBy(u => u.SchemaName, StringComparer.Ordinal).ThenBy(u => u.Name, StringComparer.Ordinal);
+        foreach (var udt in sortedTableTypes)
         {
             HashUserDefinedTableType(hasher, udt);
         }
@@ -69,38 +72,49 @@ internal sealed class SchemaHashCalculator
         // Hash views in sorted order by fully-qualified name. No count prefix and each element opens
         // with its own marker string, so appending this section changes the hash only for databases
         // that actually contain views (same for the five sections that follow).
-        foreach (var view in schema.Views.OrderBy(v => v.SchemaName, StringComparer.Ordinal).ThenBy(v => v.Name, StringComparer.Ordinal))
+        var sortedViews = schema.Views.OrderBy(v => v.SchemaName, StringComparer.Ordinal).ThenBy(v => v.Name, StringComparer.Ordinal);
+        foreach (var view in sortedViews)
         {
             HashView(hasher, view);
         }
 
         // Hash functions in sorted order by fully-qualified name
-        foreach (var function in schema.Functions.OrderBy(f => f.SchemaName, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal))
+        var sortedFunctions = schema.Functions.OrderBy(f => f.SchemaName, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal);
+        foreach (var function in sortedFunctions)
         {
             HashFunction(hasher, function);
         }
 
         // Hash triggers in sorted order by fully-qualified name
-        foreach (var trigger in schema.Triggers.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal))
+        var sortedTriggers = schema.Triggers.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal);
+        foreach (var trigger in sortedTriggers)
         {
             HashTrigger(hasher, trigger);
         }
 
         // Hash sequences in sorted order by fully-qualified name
-        foreach (var sequence in schema.Sequences.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal))
+        var sortedSequences = schema.Sequences.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal);
+        foreach (var sequence in sortedSequences)
         {
             HashSequence(hasher, sequence);
         }
 
         // Hash synonyms in sorted order by fully-qualified name
-        foreach (var synonym in schema.Synonyms.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal))
+        var sortedSynonyms = schema.Synonyms.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal);
+        foreach (var synonym in sortedSynonyms)
         {
             HashSynonym(hasher, synonym);
         }
 
         // Hash extended properties in sorted order by class, resolved target, then property name.
         // Null target parts sort as empty strings; ClassDesc keeps the scopes distinct.
-        foreach (var property in schema.ExtendedProperties.OrderBy(p => p.ClassDesc, StringComparer.Ordinal).ThenBy(p => p.SchemaName ?? string.Empty, StringComparer.Ordinal).ThenBy(p => p.ObjectName ?? string.Empty, StringComparer.Ordinal).ThenBy(p => p.SubObjectName ?? string.Empty, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal))
+        var sortedProperties = schema.ExtendedProperties
+            .OrderBy(p => p.ClassDesc, StringComparer.Ordinal)
+            .ThenBy(p => p.SchemaName ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(p => p.ObjectName ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(p => p.SubObjectName ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(p => p.Name, StringComparer.Ordinal);
+        foreach (var property in sortedProperties)
         {
             HashExtendedProperty(hasher, property);
         }
@@ -209,7 +223,8 @@ internal sealed class SchemaHashCalculator
         // option-equivalent databases order their indexes identically before hashing. nameRewrite is an
         // unconditional pre-step (used only for an anonymous temporal history table's auto-created
         // index) applied before the option-gated name normalization below.
-        foreach (var index in indexes.Select(i => GetEffectiveIndex(i, nameRewrite)).OrderBy(IndexSortKey, StringComparer.Ordinal))
+        var effectiveIndexes = indexes.Select(i => GetEffectiveIndex(i, nameRewrite)).OrderBy(IndexSortKey, StringComparer.Ordinal);
+        foreach (var index in effectiveIndexes)
         {
             AppendString(hasher, "IDX:");
             AppendString(hasher, index.Name);
@@ -235,11 +250,12 @@ internal sealed class SchemaHashCalculator
 
     private void HashKeyConstraints(IncrementalHash hasher, List<KeyConstraintSchema> constraints)
     {
-        foreach (var kc in constraints
+        var keyConstraints = constraints
             .Select(c => (c.Type, Name: EffectiveConstraintName(c.Name, c.IsSystemNamed), Keys: EffectiveKeyColumns(c.KeyColumns)))
             .OrderBy(x => x.Type, StringComparer.Ordinal)
             .ThenBy(x => x.Name, StringComparer.Ordinal)
-            .ThenBy(x => KeyColumnsSortKey(x.Keys), StringComparer.Ordinal))
+            .ThenBy(x => KeyColumnsSortKey(x.Keys), StringComparer.Ordinal);
+        foreach (var kc in keyConstraints)
         {
             AppendString(hasher, "KEYCONST:");
             AppendString(hasher, kc.Type);
@@ -254,7 +270,7 @@ internal sealed class SchemaHashCalculator
         // when Constraints.IgnoreNames collapses Name to the empty sentinel, the enforcement flags still
         // break ties (two FKs to the same table over the same columns can differ only in NOCHECK state),
         // and the extraction queries carry no ORDER BY to fall back on.
-        foreach (var fk in foreignKeys
+        var sortedForeignKeys = foreignKeys
             .Select(f => (
                 f.ReferencedSchema,
                 f.ReferencedTable,
@@ -273,7 +289,8 @@ internal sealed class SchemaHashCalculator
             .ThenBy(x => x.Name, StringComparer.Ordinal)
             .ThenBy(x => x.IsDisabled)
             .ThenBy(x => x.IsNotTrusted)
-            .ThenBy(x => x.IsNotForReplication))
+            .ThenBy(x => x.IsNotForReplication);
+        foreach (var fk in sortedForeignKeys)
         {
             AppendString(hasher, "FK:");
             AppendString(hasher, fk.Name);
@@ -298,7 +315,7 @@ internal sealed class SchemaHashCalculator
         // Sort by every hashed field (see HashForeignKeys): under Constraints.IgnoreNames two CHECK
         // constraints can share a predicate and differ only in enforcement state, and the extraction
         // query has no ORDER BY, so the enforcement flags must participate in the ordering.
-        foreach (var ck in constraints
+        var checkConstraints = constraints
             .Select(c => (
                 c.Definition,
                 Name: EffectiveConstraintName(c.Name, c.IsSystemNamed),
@@ -309,7 +326,8 @@ internal sealed class SchemaHashCalculator
             .ThenBy(x => x.Name, StringComparer.Ordinal)
             .ThenBy(x => x.IsDisabled)
             .ThenBy(x => x.IsNotTrusted)
-            .ThenBy(x => x.IsNotForReplication))
+            .ThenBy(x => x.IsNotForReplication);
+        foreach (var ck in checkConstraints)
         {
             AppendString(hasher, "CHECK:");
             AppendString(hasher, ck.Name);
@@ -322,11 +340,12 @@ internal sealed class SchemaHashCalculator
 
     private void HashDefaultConstraints(IncrementalHash hasher, List<DefaultConstraintSchema> constraints)
     {
-        foreach (var df in constraints
+        var defaultConstraints = constraints
             .Select(c => (Df: c, Name: EffectiveConstraintName(c.Name, c.IsSystemNamed)))
             .OrderBy(x => x.Df.ColumnName, StringComparer.Ordinal)
             .ThenBy(x => x.Df.Definition, StringComparer.Ordinal)
-            .ThenBy(x => x.Name, StringComparer.Ordinal))
+            .ThenBy(x => x.Name, StringComparer.Ordinal);
+        foreach (var df in defaultConstraints)
         {
             AppendString(hasher, "DEFAULT:");
             AppendString(hasher, df.Name);
@@ -393,7 +412,8 @@ internal sealed class SchemaHashCalculator
 
         // Always in column_id order — a TVP marshals its columns positionally, so column order is part
         // of the type's wire contract. IgnoreColumnOrder deliberately does NOT relax this (tables only).
-        foreach (var column in udt.Columns.OrderBy(c => c.ColumnId).ThenBy(c => c.Name, StringComparer.Ordinal))
+        var orderedColumns = udt.Columns.OrderBy(c => c.ColumnId).ThenBy(c => c.Name, StringComparer.Ordinal);
+        foreach (var column in orderedColumns)
         {
             HashColumn(hasher, column);
         }

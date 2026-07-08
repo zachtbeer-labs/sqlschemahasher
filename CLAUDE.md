@@ -38,6 +38,23 @@ Minimum target server: **SQL Server 2016 (13.x) / Azure SQL**. Extraction reads 
 ## Code Style
 
 - Function parameters, constructor arguments, and record definitions should always be on a single line. Do not wrap parameters onto multiple lines.
+- Don't reflexively wrap "long" lines. A line that a human developer would leave on one line — a `return` with a ternary, a method call with a few arguments, a `throw` with an interpolated message — stays on one line here regardless of length. Only break a line when it genuinely aids readability, not to hit an arbitrary column limit. Concretely: prefer
+  ```csharp
+  return TryParse(value, out var result)
+      ? result
+      : throw new FormatException($"'{value}' is not a valid schema-hash envelope (expected '<version>:<hash>').");
+  ```
+  over splitting the interpolated string or the method call across more lines.
+- Extract a named local for anything non-trivial you iterate or reuse — don't inline a long LINQ chain into the head of a `foreach` (or into another expression). Give the collection a descriptive name and iterate that name. This keeps the code readable and, crucially, debuggable: a developer can set a breakpoint on the `foreach` and inspect the materialized collection. Concretely: prefer
+  ```csharp
+  var checkConstraints = constraints
+      .Select(c => (c.Definition, Name: EffectiveConstraintName(c.Name, c.IsSystemNamed), ...))
+      .OrderBy(x => x.Definition, StringComparer.Ordinal)
+      .ThenBy(x => x.Name, StringComparer.Ordinal);
+  foreach (var ck in checkConstraints)
+  {
+  ```
+  over inlining the whole `.Select(...).OrderBy(...).ThenBy(...)` chain directly in the `foreach (var ck in ...)` header.
 - Terminology: call the output a **hash**, not a "digest" ("digest" is too academic). Use "hash" in comments, docs, test messages, and identifiers — the public API is `SchemaHashResult.Hash` and the envelope is `<version>:<base64hash>`.
 
 ### Important Details
