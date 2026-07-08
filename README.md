@@ -9,6 +9,9 @@ One deterministic SHA256 per database schema — ground truth for drift detectio
 [![NuGet Downloads](https://img.shields.io/nuget/dt/zachtbeer.SqlSchemaHasher)](https://www.nuget.org/packages/zachtbeer.SqlSchemaHasher)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Target frameworks](https://img.shields.io/badge/targets-net6.0%20%7C%20net7.0%20%7C%20net8.0%20%7C%20net9.0%20%7C%20net10.0-512bd4.svg)](src/zachtbeer.SqlSchemaHasher.csproj)
+[![Docs](https://img.shields.io/badge/docs-online-512bd4.svg)](https://zachtbeer-labs.github.io/sqlschemahasher/)
+
+📖 **[Full documentation →](https://zachtbeer-labs.github.io/sqlschemahasher/)**
 
 When you manage many SQL Server databases, schemas drift. Someone modifies a table directly. A backup gets restored from the wrong date. A migration partially applies and nobody notices. SqlSchemaHasher computes a deterministic SHA256 hash from the schema itself, so "what schema is this database actually running?" becomes a one-line query with a one-string answer.
 
@@ -184,7 +187,7 @@ The following are **not** read, so adding, altering, or dropping them does not c
 - **Partitioning and filegroup/data-space placement**: moving a table to a different filegroup, or repartitioning it, does not change the hash.
 - **Encrypted module bodies**: two different `WITH ENCRYPTION` modules (procedures, views, functions, or triggers) with identical signatures collide on a shared `<encrypted>` sentinel — inherent, since the body is unreadable once encrypted.
 
-See the [FAQ](https://github.com/zachtbeer-labs/sqlschemahasher/wiki/FAQ) for the reasoning behind these scope decisions and other frequently-asked design questions.
+See the [FAQ](https://zachtbeer-labs.github.io/sqlschemahasher/faq) for the reasoning behind these scope decisions and other frequently-asked design questions.
 
 ### Known limitation: definition-text rendering drift
 
