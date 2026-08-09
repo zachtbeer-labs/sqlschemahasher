@@ -12,7 +12,6 @@ namespace SqlSchemaHasher.Benchmarks.Corpus;
 /// </summary>
 public static class MetadataCorpus
 {
-    private static readonly string[] SchemaNames = ["dbo", "sales", "reporting", "staging"];
     private static readonly string[] DataTypes = ["int", "bigint", "nvarchar", "decimal", "bit", "datetime2", "uniqueidentifier", "varbinary"];
 
     /// <summary>An empty schema. Used as the base for single-object-kind projections.</summary>
@@ -51,7 +50,7 @@ public static class MetadataCorpus
     /// <summary>Sequences and synonyms only, grouped since each kind alone is too small a corpus slice to measure meaningfully.</summary>
     public static SchemaMetadata OnlySequencesAndSynonyms(SchemaMetadata schema) => Empty with { Sequences = schema.Sequences, Synonyms = schema.Synonyms };
 
-    private static string SchemaFor(int index) => SchemaNames[index % SchemaNames.Length];
+    private static string SchemaFor(int index) => CorpusSchemas.For(index);
 
     // The corpus's one job is byte-identical output across machines and runs, so its number formatting
     // is pinned explicitly here rather than inherited from whatever culture happens to be active in the
