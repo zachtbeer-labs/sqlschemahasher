@@ -47,10 +47,10 @@ docker run -d --name sqlschemahasher-audit \
 - [ ] **Step 2: Wait for it to accept connections, then verify with a trivial query**
 
 ```bash
-docker exec sqlschemahasher-audit /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "DeepDishD@tabas3!" -C -Q "SELECT 1 AS ok"
+MSYS_NO_PATHCONV=1 docker exec sqlschemahasher-audit /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "DeepDishD@tabas3!" -C -Q "SELECT 1 AS ok"
 ```
 
-Retry every few seconds (SQL Server inside the container typically takes 15-30s to accept connections after `docker run` returns) until this returns `ok / 1` instead of a connection-refused error. Do not proceed until it succeeds.
+(`MSYS_NO_PATHCONV=1` avoids Git Bash on Windows mangling the `/opt/...` container path.) Retry every few seconds (SQL Server inside the container typically takes 15-30s to accept connections after `docker run` returns) until this returns `ok / 1` instead of a connection-refused error. Do not proceed until it succeeds.
 
 - [ ] **Step 3: No commit** — this task only starts ephemeral infrastructure; there is no repo state to commit.
 
@@ -108,8 +108,8 @@ const AUDIT_SCHEMA = {
 function docPrompt(topic) {
   return `You are documenting the SQL Server "${topic.title}" schema object type for an internal coverage audit in the repository at D:\\code\\sqlschemahasher. This is a BLIND research pass: do NOT read any source file in this repository (no .cs files, no docs/ or website/docs/ content, no BUGS.md). Work only from the live SQL Server catalog and official Microsoft Learn documentation.
 
-A shared SQL Server 2025 container named "${args.containerName}" is already running and reachable. Query it with:
-  docker exec ${args.containerName} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "${args.dbPassword}" -C -Q "<your T-SQL>"
+A shared SQL Server 2025 container named "${args.containerName}" is already running and reachable. This environment's Bash tool is Git Bash on Windows, which mangles \`/opt/...\` style paths unless MSYS path conversion is disabled — always prefix docker exec calls with MSYS_NO_PATHCONV=1. Query it with:
+  MSYS_NO_PATHCONV=1 docker exec ${args.containerName} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "${args.dbPassword}" -C -Q "<your T-SQL>"
 
 Work inside your own schema so you do not collide with other topics running concurrently against the same shared container:
   CREATE SCHEMA audit_${topic.slug};
