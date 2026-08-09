@@ -404,3 +404,8 @@ FodyWeavers.xsd
 
 # macOS
 .DS_Store
+
+# BenchmarkDotNet run logs and stray default-location artifacts.
+# The exports under benchmarks/results/<version>/results/ ARE committed.
+benchmarks/results/**/*.log
+BenchmarkDotNet.Artifacts/
