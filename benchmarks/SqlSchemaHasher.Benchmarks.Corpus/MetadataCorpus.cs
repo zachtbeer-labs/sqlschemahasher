@@ -48,6 +48,9 @@ public static class MetadataCorpus
     /// <summary>Extended properties only.</summary>
     public static SchemaMetadata OnlyExtendedProperties(SchemaMetadata schema) => Empty with { ExtendedProperties = schema.ExtendedProperties };
 
+    /// <summary>Sequences and synonyms only, grouped since each kind alone is too small a corpus slice to measure meaningfully.</summary>
+    public static SchemaMetadata OnlySequencesAndSynonyms(SchemaMetadata schema) => Empty with { Sequences = schema.Sequences, Synonyms = schema.Synonyms };
+
     private static string SchemaFor(int index) => SchemaNames[index % SchemaNames.Length];
 
     // The corpus's one job is byte-identical output across machines and runs, so its number formatting

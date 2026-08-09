@@ -19,6 +19,7 @@ public class ObjectKindBenchmarks
     private SchemaMetadata _modules = MetadataCorpus.Empty;
     private SchemaMetadata _tableTypes = MetadataCorpus.Empty;
     private SchemaMetadata _extendedProperties = MetadataCorpus.Empty;
+    private SchemaMetadata _sequencesAndSynonyms = MetadataCorpus.Empty;
 
     [GlobalSetup]
     public void Setup()
@@ -30,6 +31,7 @@ public class ObjectKindBenchmarks
         _modules = MetadataCorpus.OnlyModules(full);
         _tableTypes = MetadataCorpus.OnlyTableTypes(full);
         _extendedProperties = MetadataCorpus.OnlyExtendedProperties(full);
+        _sequencesAndSynonyms = MetadataCorpus.OnlySequencesAndSynonyms(full);
     }
 
     [Benchmark(Baseline = true)]
@@ -43,4 +45,7 @@ public class ObjectKindBenchmarks
 
     [Benchmark]
     public string ExtendedProperties() => SqlSchemaHash.ComputeHash(_extendedProperties, _options);
+
+    [Benchmark]
+    public string SequencesAndSynonyms() => SqlSchemaHash.ComputeHash(_sequencesAndSynonyms, _options);
 }

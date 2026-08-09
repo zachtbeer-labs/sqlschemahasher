@@ -111,4 +111,58 @@ public class MetadataCorpusTests
         modulesOnly.Triggers.Count.ShouldBe(full.Triggers.Count);
         modulesOnly.Tables.ShouldBeEmpty();
     }
+
+    [TestMethod]
+    public void OnlyTableTypes_RetainsTableTypesAndDropsEverythingElse()
+    {
+        var full = MetadataCorpus.Build(SchemaProfile.Small);
+
+        var tableTypesOnly = MetadataCorpus.OnlyTableTypes(full);
+
+        tableTypesOnly.UserDefinedTableTypes.Count.ShouldBe(full.UserDefinedTableTypes.Count);
+        tableTypesOnly.Tables.ShouldBeEmpty();
+        tableTypesOnly.StoredProcedures.ShouldBeEmpty();
+        tableTypesOnly.Views.ShouldBeEmpty();
+        tableTypesOnly.Functions.ShouldBeEmpty();
+        tableTypesOnly.Triggers.ShouldBeEmpty();
+        tableTypesOnly.Sequences.ShouldBeEmpty();
+        tableTypesOnly.Synonyms.ShouldBeEmpty();
+        tableTypesOnly.ExtendedProperties.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void OnlyExtendedProperties_RetainsExtendedPropertiesAndDropsEverythingElse()
+    {
+        var full = MetadataCorpus.Build(SchemaProfile.Small);
+
+        var extendedPropertiesOnly = MetadataCorpus.OnlyExtendedProperties(full);
+
+        extendedPropertiesOnly.ExtendedProperties.Count.ShouldBe(full.ExtendedProperties.Count);
+        extendedPropertiesOnly.Tables.ShouldBeEmpty();
+        extendedPropertiesOnly.StoredProcedures.ShouldBeEmpty();
+        extendedPropertiesOnly.Views.ShouldBeEmpty();
+        extendedPropertiesOnly.Functions.ShouldBeEmpty();
+        extendedPropertiesOnly.Triggers.ShouldBeEmpty();
+        extendedPropertiesOnly.Sequences.ShouldBeEmpty();
+        extendedPropertiesOnly.Synonyms.ShouldBeEmpty();
+        extendedPropertiesOnly.UserDefinedTableTypes.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void OnlySequencesAndSynonyms_RetainsSequencesAndSynonymsAndDropsEverythingElse()
+    {
+        var full = MetadataCorpus.Build(SchemaProfile.Small);
+
+        var sequencesAndSynonymsOnly = MetadataCorpus.OnlySequencesAndSynonyms(full);
+
+        sequencesAndSynonymsOnly.Sequences.Count.ShouldBe(full.Sequences.Count);
+        sequencesAndSynonymsOnly.Synonyms.Count.ShouldBe(full.Synonyms.Count);
+        sequencesAndSynonymsOnly.Tables.ShouldBeEmpty();
+        sequencesAndSynonymsOnly.StoredProcedures.ShouldBeEmpty();
+        sequencesAndSynonymsOnly.Views.ShouldBeEmpty();
+        sequencesAndSynonymsOnly.Functions.ShouldBeEmpty();
+        sequencesAndSynonymsOnly.Triggers.ShouldBeEmpty();
+        sequencesAndSynonymsOnly.UserDefinedTableTypes.ShouldBeEmpty();
+        sequencesAndSynonymsOnly.ExtendedProperties.ShouldBeEmpty();
+    }
 }
