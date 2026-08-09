@@ -70,6 +70,10 @@ Version numbers tell you what *should* be deployed, not what *actually is* deplo
 - **Migration tooling** — Compare a database's hash against the target schema before generating diff SQL. If hashes match, skip the diff entirely.
 - **Fleet-wide grouping** — Group all databases by hash to get the full picture of what's actually deployed.
 
+## Performance
+
+SqlSchemaHasher is fast — schema hashing is measured in milliseconds, not seconds. See [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/performance) for measured numbers, methodology and caveats.
+
 ## API Reference
 
 ### `SqlSchemaHash.GetHashAsync(connectionString)`
@@ -326,20 +330,6 @@ if (SchemaHashResult.Compare(prodHash, stagingHash) != SchemaHashComparison.Equa
     throw new Exception("Staging schema does not match production!");
 }
 ```
-
-## Performance
-
-Hashing a 200-table, 500-procedure database takes roughly **450 ms**, of which about **6 ms** is the hash calculation itself — the remaining 98% is catalog extraction. If you already hold a `SchemaMetadata` from `ExtractSchemaAsync`, computing further hashes from it with different options is nearly free.
-
-Normalization presets cost nothing measurable: `Strict`, `V1`, `V2` and `Structural` all hash the same number of elements, so pick one for its comparison semantics, not its speed.
-
-| Profile | Extract | Extract + hash |
-|---|---:|---:|
-| 25 tables, 50 procs | 56 ms | 57 ms |
-| 200 tables, 500 procs | 445 ms | 451 ms |
-| 1,000 tables, 2,000 procs | 5.27 s | 5.30 s |
-
-Measured on a local SQL Server LocalDB instance, so these exclude network latency. See [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/performance) for the full tables, per-object-kind breakdown, methodology and caveats.
 
 ## Dependencies
 

@@ -52,6 +52,10 @@ Version numbers tell you what *should* be deployed, not what *actually is* deplo
 - **Migration tooling** — Compare a database's hash against the target schema before generating diff SQL. If hashes match, skip the diff entirely.
 - **Fleet-wide grouping** — Group all databases by hash to get the full picture of what's actually deployed.
 
+## Performance
+
+SqlSchemaHasher is fast — schema hashing is measured in milliseconds, not seconds. See [Performance](./performance.md) for measured numbers, methodology and caveats.
+
 :::note Project status
 v2.0.0 is currently in preparation. The badges in the repository and the package on NuGet.org reflect the latest *published* release; this documentation describes the code in the repository, which may be ahead of what's published.
 :::

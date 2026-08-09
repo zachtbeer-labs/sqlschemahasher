@@ -61,7 +61,7 @@ Hashes produced by 2.0.0 are **not comparable** to hashes from 1.x: extraction f
 ### Docs
 
 - A documentation site now ships on GitHub Pages (`https://zachtbeer-labs.github.io/sqlschemahasher/`), built with Docusaurus from the sources under `website/` and deployed by the `docs.yml` workflow. The FAQ moved off the GitHub wiki into the site; `PackageProjectUrl` and the README now point at it
-- Published performance characterization: a committed BenchmarkDotNet suite (`benchmarks/`) measures hash-calculation cost (in-memory, no database) and end-to-end extraction-plus-hashing cost (against SQL Server LocalDB) across Small/Medium/Large synthetic schema profiles. Results are summarized in the README's new Performance section and detailed in full, with methodology and caveats, on the docs site's new [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/performance) page; raw exports are committed under `benchmarks/results/<version>/`
+- Published performance characterization: a committed BenchmarkDotNet suite (`benchmarks/`) measures hash-calculation cost (in-memory, no database) and end-to-end extraction-plus-hashing cost (against SQL Server LocalDB) across Small/Medium/Large synthetic schema profiles. Results are published in full, with methodology and caveats, on the docs site's new [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/performance) page, which the README links to; raw exports are committed under `benchmarks/results/<version>/`
 
 ## [1.0.0] - 2025-02-05
 
