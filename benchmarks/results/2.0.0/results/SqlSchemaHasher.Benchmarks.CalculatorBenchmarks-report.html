@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>SqlSchemaHasher.Benchmarks.CalculatorBenchmarks-20260809-150519</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.15.8, Windows 11 (10.0.26200.8973/25H2/2025Update/HudsonValley2)
+12th Gen Intel Core i9-12900K 3.19GHz, 1 CPU, 24 logical and 16 physical cores
+.NET SDK 10.0.302
+  [Host]     : .NET 10.0.10 (10.0.10, 10.0.1026.32716), X64 RyuJIT x86-64-v3
+  DefaultJob : .NET 10.0.10 (10.0.10, 10.0.1026.32716), X64 RyuJIT x86-64-v3
+</code></pre>
+<pre><code></code></pre>
+
+<table>
+<thead><tr><th>Method</th><th>Preset</th><th>Profile</th><th>Mean </th><th>Error</th><th>StdDev</th><th>Gen0</th><th>Gen1</th><th>Allocated</th>
+</tr>
+</thead><tbody><tr><td>ComputeHash</td><td>Strict</td><td>Large</td><td>35,495.6 &mu;s</td><td>570.19 &mu;s</td><td>533.36 &mu;s</td><td>1533.3333</td><td>66.6667</td><td>23487.53 KB</td>
+</tr><tr><td>ComputeHash</td><td>Strict</td><td>Medium</td><td>6,198.6 &mu;s</td><td>103.76 &mu;s</td><td>91.98 &mu;s</td><td>273.4375</td><td>-</td><td>4277.94 KB</td>
+</tr><tr><td>ComputeHash</td><td>Strict</td><td>Small</td><td>519.0 &mu;s</td><td>10.26 &mu;s</td><td>11.40 &mu;s</td><td>27.3438</td><td>-</td><td>420.07 KB</td>
+</tr><tr><td>ComputeHash</td><td>Structural</td><td>Large</td><td>34,776.9 &mu;s</td><td>551.14 &mu;s</td><td>488.57 &mu;s</td><td>1533.3333</td><td>66.6667</td><td>23575.5 KB</td>
+</tr><tr><td>ComputeHash</td><td>Structural</td><td>Medium</td><td>6,151.2 &mu;s</td><td>110.43 &mu;s</td><td>97.89 &mu;s</td><td>273.4375</td><td>-</td><td>4287.75 KB</td>
+</tr><tr><td>ComputeHash</td><td>Structural</td><td>Small</td><td>520.8 &mu;s</td><td>8.57 &mu;s</td><td>12.02 &mu;s</td><td>27.3438</td><td>-</td><td>420.37 KB</td>
+</tr><tr><td>ComputeHash</td><td>V1</td><td>Large</td><td>34,531.3 &mu;s</td><td>525.93 &mu;s</td><td>466.22 &mu;s</td><td>1533.3333</td><td>-</td><td>24288.39 KB</td>
+</tr><tr><td>ComputeHash</td><td>V1</td><td>Medium</td><td>6,240.2 &mu;s</td><td>86.46 &mu;s</td><td>80.87 &mu;s</td><td>281.2500</td><td>-</td><td>4412.24 KB</td>
+</tr><tr><td>ComputeHash</td><td>V1</td><td>Small</td><td>530.1 &mu;s</td><td>7.01 &mu;s</td><td>6.88 &mu;s</td><td>27.3438</td><td>-</td><td>432.6 KB</td>
+</tr><tr><td>ComputeHash</td><td>V2</td><td>Large</td><td>35,524.9 &mu;s</td><td>399.60 &mu;s</td><td>354.24 &mu;s</td><td>1500.0000</td><td>71.4286</td><td>23487.53 KB</td>
+</tr><tr><td>ComputeHash</td><td>V2</td><td>Medium</td><td>6,215.4 &mu;s</td><td>109.58 &mu;s</td><td>102.50 &mu;s</td><td>273.4375</td><td>-</td><td>4277.94 KB</td>
+</tr><tr><td>ComputeHash</td><td>V2</td><td>Small</td><td>523.1 &mu;s</td><td>8.17 &mu;s</td><td>7.64 &mu;s</td><td>27.3438</td><td>-</td><td>420.07 KB</td>
+</tr></tbody></table>
+</body>
+</html>

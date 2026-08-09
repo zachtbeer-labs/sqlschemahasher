@@ -327,6 +327,20 @@ if (SchemaHashResult.Compare(prodHash, stagingHash) != SchemaHashComparison.Equa
 }
 ```
 
+## Performance
+
+Hashing a 200-table, 500-procedure database takes roughly **450 ms**, of which about **6 ms** is the hash calculation itself — the remaining 98% is catalog extraction. If you already hold a `SchemaMetadata` from `ExtractSchemaAsync`, computing further hashes from it with different options is nearly free.
+
+Normalization presets cost nothing measurable: `Strict`, `V1`, `V2` and `Structural` all hash the same number of elements, so pick one for its comparison semantics, not its speed.
+
+| Profile | Extract | Extract + hash |
+|---|---:|---:|
+| 25 tables, 50 procs | 56 ms | 57 ms |
+| 200 tables, 500 procs | 445 ms | 451 ms |
+| 1,000 tables, 2,000 procs | 5.27 s | 5.30 s |
+
+Measured on a local SQL Server LocalDB instance, so these exclude network latency. See [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/docs/performance) for the full tables, per-object-kind breakdown, methodology and caveats.
+
 ## Dependencies
 
 - `Microsoft.Data.SqlClient` - SQL Server connectivity
