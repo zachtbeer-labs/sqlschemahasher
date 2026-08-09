@@ -65,7 +65,7 @@ public static class DdlCorpus
             for (var c = 1; c < profile.ColumnsPerTable; c++)
             {
                 var nullability = c % 3 == 0 ? "NOT NULL" : "NULL";
-                builder.AppendLine($"    [Col{Inv(c)}] {ColumnTypeFor(c)} {nullability},");
+                builder.AppendLine($"    [Col{Inv(c)}] {ColumnTypeFor(c, profile)} {nullability},");
             }
 
             builder.AppendLine($"    CONSTRAINT [PK_{name}] PRIMARY KEY CLUSTERED ([{name}Id]),");
@@ -77,10 +77,15 @@ public static class DdlCorpus
         }
     }
 
-    /// <summary>Col1 is int so the CHECK and DEFAULT above are valid; the rest cycle through types.</summary>
-    private static string ColumnTypeFor(int columnIndex)
+    /// <summary>
+    /// Col1 is int so the CHECK and DEFAULT above are valid. Columns 2 through <c>1 + ForeignKeysPerTable</c>
+    /// are also int: <see cref="AppendForeignKeys"/> targets exactly those columns, and a foreign key's
+    /// referencing column must match the type of the parent's int identity primary key it references. The
+    /// rest cycle through the other types so the schema stays type-diverse.
+    /// </summary>
+    private static string ColumnTypeFor(int columnIndex, SchemaProfile profile)
     {
-        if (columnIndex == 1)
+        if (columnIndex >= 1 && columnIndex <= 1 + profile.ForeignKeysPerTable)
         {
             return "int";
         }
@@ -97,11 +102,6 @@ public static class DdlCorpus
             for (var k = 0; k < profile.ForeignKeysPerTable; k++)
             {
                 var referencedIndex = Math.Max(0, i - 1 - k);
-                if (referencedIndex == i)
-                {
-                    continue;
-                }
-
                 batches.Add($"ALTER TABLE [{SchemaFor(i)}].[Table{Inv(i)}] ADD CONSTRAINT [FK_Table{Inv(i)}_{Inv(referencedIndex)}_{Inv(k)}] FOREIGN KEY ([Col{Inv(k + 2)}]) REFERENCES [{SchemaFor(referencedIndex)}].[Table{Inv(referencedIndex)}] ([Table{Inv(referencedIndex)}Id]);");
             }
         }
@@ -129,7 +129,7 @@ public static class DdlCorpus
             builder.AppendLine($"    [{name}Id] int NOT NULL,");
             for (var c = 1; c < profile.ColumnsPerTable; c++)
             {
-                builder.AppendLine($"    [Col{Inv(c)}] {ColumnTypeFor(c)} NULL,");
+                builder.AppendLine($"    [Col{Inv(c)}] {ColumnTypeFor(c, profile)} NULL,");
             }
 
             builder.AppendLine($"    PRIMARY KEY CLUSTERED ([{name}Id])");
