@@ -51,7 +51,7 @@ hash computation — 0.82 ms and 5.90 ms respectively, both well outside the ±0
 these runs, so that gap is a real measurement. At Large it isn't: the 25 ms gap between 5,271.61 ms
 ± 50.702 ms and 5,297.04 ms ± 65.548 ms is smaller than either measurement's own error, and
 BenchmarkDotNet's `Ratio` column reports both rows as `1.00` — indistinguishable at this resolution.
-It also disagrees with the hash-calculation tier below, which measures Large `V2` hashing at 35.5 ms
+It also disagrees with the hash-calculation tier below, which measures Large `V2` hashing at 34.9 ms
 on its own, larger than the entire end-to-end delta observed here. The hash-calculation tier hashes
 pre-extracted metadata directly and is the reliable source for hash cost at every size; the
 end-to-end delta above is only a usable estimate where it clears the error bars, which holds at Small
@@ -68,9 +68,9 @@ compared to re-extracting.
 
 | Profile | Strict | V1 | V2 | Structural |
 |---|---:|---:|---:|---:|
-| Small | 519 µs | 530 µs | 523 µs | 521 µs |
-| Medium | 6.20 ms | 6.24 ms | 6.22 ms | 6.15 ms |
-| Large | 35.5 ms | 34.5 ms | 35.5 ms | 34.8 ms |
+| Small | 522 µs | 525 µs | 500 µs | 523 µs |
+| Medium | 6.13 ms | 6.24 ms | 6.16 ms | 6.12 ms |
+| Large | 35.2 ms | 35.9 ms | 34.9 ms | 35.6 ms |
 
 **Normalization presets cost nothing measurable.** All four land within run-to-run noise of each
 other at every size, because they hash the same number of elements and differ only in which field
@@ -83,17 +83,17 @@ measured.
 ## Cost by object kind
 
 Each object kind hashed in isolation, at the Medium profile with `V2`. "Share of total" is each
-kind's mean against the Medium `V2` total from the hash-calculation table above (6.22 ms).
+kind's mean against the Medium `V2` total from the hash-calculation table above (6.16 ms).
 
 | Object kind | Mean | Share of total |
 |---|---:|---:|
-| Tables (with columns, indexes, constraints) | 3,904 µs | 63% |
-| Modules (procedures, views, functions, triggers) | 1,795 µs | 29% |
-| Table types | 191 µs | 3.1% |
-| Extended properties | 130 µs | 2.1% |
+| Tables (with columns, indexes, constraints) | 3,888 µs | 63% |
+| Modules (procedures, views, functions, triggers) | 1,787 µs | 29% |
+| Table types | 195 µs | 3.2% |
+| Extended properties | 135 µs | 2.2% |
 | Sequences and synonyms | 12 µs | 0.2% |
 
-The five sum to 6.03 ms against the Medium profile's 6.22 ms total, so they account for essentially
+The five sum to 6.02 ms against the Medium profile's 6.16 ms total, so they account for essentially
 all the work.
 
 Tables dominate because each carries columns, indexes and four kinds of constraint, all of which are
