@@ -38,6 +38,10 @@ Tests are split into two projects:
 
 `dotnet test SqlSchemaHasher.sln` runs both.
 
+### Dependencies
+
+This repo uses [Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management). NuGet versions live in `Directory.Packages.props` at the repo root — project files reference packages without a `Version` attribute. To add or bump a dependency, add/edit its `<PackageVersion>` entry there, then regenerate the lock files with `dotnet restore SqlSchemaHasher.sln --force-evaluate` and commit them alongside the change (CI restores with `--locked-mode`).
+
 ## Pull Request Guidelines
 
 1. Branch from `main`.
