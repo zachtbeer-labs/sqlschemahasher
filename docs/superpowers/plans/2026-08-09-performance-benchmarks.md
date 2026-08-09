@@ -1269,54 +1269,59 @@ git commit -m "feat(benchmarks): add DDL renderer for the integration tier"
 
 ### Task 5: Integration tier
 
-End-to-end benchmarks against a Testcontainers SQL Server, measuring extraction and full hashing separately so the published table shows the split.
+End-to-end benchmarks against a real SQL Server, measuring extraction and full hashing separately so the published table shows the split.
+
+**Uses LocalDB, not Docker.** The maintainer's machine has SQL Server 2025 LocalDB (17.0) installed — the same engine major version as the Testcontainers image the integration test suite uses. LocalDB needs no container, no image pull, and no startup wait, which matters because these benchmarks are run by hand at release time. The integration test suite keeps using Testcontainers; only the benchmarks switch.
+
+A consequence worth documenting rather than hiding: LocalDB is a local engine, so extraction times exclude network latency. That makes it a *better* regression instrument (less noise) but it means the published figure characterizes a local engine, not a remote server. Task 7 must say so.
 
 **Files:**
 - Create: `benchmarks/SqlSchemaHasher.Benchmarks/BenchmarkSqlServer.cs`
 - Create: `benchmarks/SqlSchemaHasher.Benchmarks/EndToEndBenchmarks.cs`
-- Modify: `benchmarks/SqlSchemaHasher.Benchmarks/SqlSchemaHasher.Benchmarks.csproj` (add packages)
+- Modify: `benchmarks/SqlSchemaHasher.Benchmarks/SqlSchemaHasher.Benchmarks.csproj` (add one package)
 
 **Interfaces:**
 - Consumes: `DdlCorpus.Script`, `SchemaProfile`, `BenchmarkConfig.IntegrationCategory`.
-- Produces: `BenchmarkSqlServer.EnsureSeededDatabaseAsync(SchemaProfile profile) → Task<string>`, returning a connection string to a seeded database. There is deliberately no shutdown method — see the note in `EndToEndBenchmarks`.
+- Produces: `BenchmarkSqlServer.EnsureSeededDatabaseAsync(SchemaProfile profile) → Task<string>`, returning a connection string to a seeded database.
 
-- [ ] **Step 1: Add the required packages**
+- [ ] **Step 1: Add the required package**
 
 Add to `benchmarks/SqlSchemaHasher.Benchmarks/SqlSchemaHasher.Benchmarks.csproj`, in the `PackageReference` `ItemGroup`:
 
 ```xml
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.2" />
-    <PackageReference Include="Testcontainers.MsSql" Version="4.8.1" />
 ```
+
+No Testcontainers package. That is the point of the LocalDB switch.
 
 - [ ] **Step 2: Write `BenchmarkSqlServer.cs`**
 
-One container is shared by the whole process; each profile gets its own database on it. `[GlobalSetup]` runs once per parameter combination, so a container per setup would start three containers for three profiles.
+Each profile gets its own database on the LocalDB instance. `[GlobalSetup]` runs once per parameter combination, so the `SeededProfiles` set makes seeding idempotent within a process.
 
 ```csharp
 using Microsoft.Data.SqlClient;
 using SqlSchemaHasher.Benchmarks.Corpus;
-using Testcontainers.MsSql;
 
 namespace SqlSchemaHasher.Benchmarks;
 
 /// <summary>
-/// Provides the SQL Server instance backing the integration tier. One container is shared across the
-/// whole process and each profile is seeded into its own database, because BenchmarkDotNet runs
-/// <c>[GlobalSetup]</c> once per parameter combination and a container per setup would be wasteful.
+/// Provides the SQL Server instance backing the integration tier. Defaults to LocalDB, which needs
+/// no container and no startup wait; each profile is seeded into its own database. BenchmarkDotNet
+/// runs <c>[GlobalSetup]</c> once per parameter combination, so seeding is guarded to happen once
+/// per profile per process.
 ///
-/// Set <c>SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING</c> to benchmark against a real server instead
-/// of a container — the published headline numbers should come from real hardware, not Docker.
+/// Set <c>SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING</c> to benchmark against a different server —
+/// LocalDB measures the library without network latency, which is the right baseline for detecting
+/// regressions but understates what a networked deployment sees.
 /// </summary>
 internal static class BenchmarkSqlServer
 {
     private const string ConnectionStringVariable = "SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING";
+    private const string LocalDbConnectionString = @"Server=(localdb)\MSSQLLocalDB;Integrated Security=True;TrustServerCertificate=True;";
 
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static readonly HashSet<string> SeededProfiles = [];
 
-    // Held in a field purely to keep the container referenced for the process lifetime.
-    private static MsSqlContainer? _container;
     private static string? _serverConnectionString;
 
     public static async Task<string> EnsureSeededDatabaseAsync(SchemaProfile profile)
@@ -1324,7 +1329,7 @@ internal static class BenchmarkSqlServer
         await Gate.WaitAsync();
         try
         {
-            var serverConnectionString = await EnsureServerAsync();
+            var serverConnectionString = EnsureServer();
             var databaseName = $"Bench_{profile.Name}";
 
             if (SeededProfiles.Add(profile.Name))
@@ -1341,7 +1346,12 @@ internal static class BenchmarkSqlServer
         }
     }
 
-    private static async Task<string> EnsureServerAsync()
+    /// <summary>
+    /// Resolves the server to benchmark against: the configured connection string if one is set,
+    /// otherwise LocalDB. No async work remains here, but the signature stays task-shaped because
+    /// every caller is already in an async path.
+    /// </summary>
+    private static string EnsureServer()
     {
         if (_serverConnectionString is not null)
         {
@@ -1349,16 +1359,7 @@ internal static class BenchmarkSqlServer
         }
 
         var configured = Environment.GetEnvironmentVariable(ConnectionStringVariable);
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            _serverConnectionString = configured;
-            return _serverConnectionString;
-        }
-
-        var image = Environment.GetEnvironmentVariable("SQLSERVER_IMAGE") ?? "mcr.microsoft.com/mssql/server:2025-latest";
-        _container = new MsSqlBuilder().WithImage(image).WithPassword("DeepDishD@tabas3!").Build();
-        await _container.StartAsync();
-        _serverConnectionString = _container.GetConnectionString();
+        _serverConnectionString = string.IsNullOrWhiteSpace(configured) ? LocalDbConnectionString : configured;
         return _serverConnectionString;
     }
 
@@ -1407,8 +1408,8 @@ namespace SqlSchemaHasher.Benchmarks;
 /// <summary>
 /// The characterization tier: what a consumer actually experiences. Extraction and full hashing are
 /// measured separately so the published table shows the split — the point being that the cost is
-/// round-trips, not SHA256. Requires Docker (or a server via the connection-string override) and is
-/// excluded from the default run.
+/// round-trips, not SHA256. Requires a SQL Server instance (LocalDB by default) and is excluded from
+/// the default run.
 /// </summary>
 [BenchmarkCategory(BenchmarkConfig.IntegrationCategory)]
 public class EndToEndBenchmarks
@@ -1427,10 +1428,8 @@ public class EndToEndBenchmarks
         _connectionString = await BenchmarkSqlServer.EnsureSeededDatabaseAsync(Profile);
     }
 
-    // Deliberately no [GlobalCleanup] disposing the container: BenchmarkDotNet runs GlobalCleanup
-    // once per parameter combination, so disposing there would tear down the shared container after
-    // the first profile and strand the remaining two. Testcontainers' resource reaper removes the
-    // container when the process exits.
+    // No [GlobalCleanup]: the seeded Bench_* databases are left on the LocalDB instance between runs
+    // so a failed run can be inspected. Each run drops and recreates them, so nothing goes stale.
 
     [Benchmark(Baseline = true)]
     public async Task<SchemaMetadata> ExtractSchema() => await SqlSchemaHash.ExtractSchemaAsync(_connectionString, _options);
@@ -1447,17 +1446,27 @@ dotnet restore SqlSchemaHasher.sln
 dotnet build SqlSchemaHasher.sln -c Release
 ```
 
-Expected: 0 warnings. Confirm the benchmark project's `packages.lock.json` was updated with the two new packages.
+Expected: 0 warnings. Confirm the benchmark project's `packages.lock.json` was updated with the new package.
 
 - [ ] **Step 5: Smoke-run the integration tier**
 
-Docker must be running. Seeding the `Large` profile creates 1000 tables and 2000 procedures and takes several minutes on first run — this is expected, not a hang.
+No Docker needed — this uses LocalDB. Seeding the `Large` profile creates 1000 tables and 2000 procedures and takes several minutes, which is expected, not a hang.
 
 ```bash
 dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release -- --job Dry --anyCategories Integration
 ```
 
-Expected: 6 cases (3 profiles × 2 benchmarks) run without exceptions. If a `CREATE` statement fails, the error names the failing batch — fix `DdlCorpus` in Task 4 rather than working around it here.
+Expected: 6 cases (3 profiles × 2 benchmarks) run without exceptions.
+
+**This step is the first execution of the generated DDL against a real engine** — nothing before it proves the script runs. If a `CREATE` or `ALTER` fails, the exception names the failing batch. Report the failing statement and stop; the fix belongs in `DdlCorpus` (Task 4's file), not in a workaround here. Do not swallow, skip, or retry a failing batch: a seeding failure means the generated schema is wrong, and measuring a partially-built database would produce numbers that look plausible and mean nothing.
+
+Sanity-check the seeded result before trusting it — for each profile, confirm the database actually contains the expected object counts:
+
+```sql
+SELECT type_desc, COUNT(*) FROM sys.objects WHERE is_ms_shipped = 0 GROUP BY type_desc;
+```
+
+`USER_TABLE` should match the profile's table count and `SQL_STORED_PROCEDURE` its procedure count. Put those counts in your report.
 
 - [ ] **Step 6: Verify the default run still excludes the integration tier**
 
@@ -1465,7 +1474,7 @@ Expected: 6 cases (3 profiles × 2 benchmarks) run without exceptions. If a `CRE
 dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release -- --job Dry --filter *
 ```
 
-Expected: `CalculatorBenchmarks` and `ObjectKindBenchmarks` cases run; no `EndToEndBenchmarks` case appears. This proves the category filter works — if end-to-end benchmarks show up here, the default run would require Docker, defeating the tier split.
+Expected: `CalculatorBenchmarks` and `ObjectKindBenchmarks` cases run; no `EndToEndBenchmarks` case appears. This proves the category filter works — if end-to-end benchmarks show up here, the default run would require a database, defeating the tier split.
 
 - [ ] **Step 7: Commit**
 

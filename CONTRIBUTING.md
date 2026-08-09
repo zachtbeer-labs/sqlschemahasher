@@ -38,6 +38,35 @@ Tests are split into two projects:
 
 `dotnet test SqlSchemaHasher.sln` runs both.
 
+### Benchmarks
+
+Performance benchmarks live in `benchmarks/` and are run by hand — there is no CI performance gate,
+because shared runners vary too much between runs for a threshold to be meaningful. Committed
+results under `benchmarks/results/<version>/` are the baseline; comparing releases is a `git diff`.
+
+**Calculator tier** — hashes synthetic in-memory schemas. No database, a few minutes to run. Use it
+before and after any change to `SchemaHashCalculator`:
+
+```bash
+dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release
+```
+
+**Integration tier** — end-to-end extraction and hashing against a real database, seeded from
+generated DDL. Uses SQL Server LocalDB, so no Docker is needed. Run it at major and minor releases
+to refresh the published characterization table:
+
+```bash
+dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release -- --anyCategories Integration
+```
+
+Set `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` to measure against a different server. LocalDB
+excludes network latency, which makes it a cleaner regression signal but understates what a
+networked deployment sees.
+
+Close other applications before a run whose results you intend to commit, and note that numbers are
+only comparable across runs on the same machine — BenchmarkDotNet records the host environment in
+every export for that reason.
+
 ## Pull Request Guidelines
 
 1. Branch from `main`.

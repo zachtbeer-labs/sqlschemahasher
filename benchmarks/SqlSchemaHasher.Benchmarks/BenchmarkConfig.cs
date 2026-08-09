@@ -8,7 +8,7 @@ using BenchmarkDotNet.Filters;
 namespace SqlSchemaHasher.Benchmarks;
 
 /// <summary>
-/// Shared BenchmarkDotNet configuration: memory diagnostics, the three committed export formats,
+/// Shared BenchmarkDotNet configuration: memory diagnostics, a JSON export on top of the defaults,
 /// and results routed into the repository's version-scoped results directory.
 /// </summary>
 internal static class BenchmarkConfig
@@ -18,10 +18,11 @@ internal static class BenchmarkConfig
 
     public static IConfig Create(bool includeIntegration)
     {
+        // DefaultConfig.Instance already registers the GitHub-flavoured Markdown and CSV exporters;
+        // re-adding them makes BenchmarkDotNet emit an "already present" warning into every run's
+        // output, which would then be committed alongside the results. Only JSON is genuinely new.
         var config = DefaultConfig.Instance
             .AddDiagnoser(MemoryDiagnoser.Default)
-            .AddExporter(MarkdownExporter.GitHub)
-            .AddExporter(CsvExporter.Default)
             .AddExporter(JsonExporter.Full)
             .WithArtifactsPath(RepoPaths.ResultsDirectory());
 

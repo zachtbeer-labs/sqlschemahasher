@@ -31,6 +31,13 @@ jobs:
     - run: dotnet restore SqlSchemaHasher.sln --locked-mode
     - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
     - run: dotnet test tests/SqlSchemaHash.UnitTests/SqlSchemaHash.UnitTests.csproj -c Release --no-build --verbosity normal
+
+    # Executes each no-database benchmark exactly once with no statistics, so a benchmark that
+    # throws is caught at PR time. This is a compile-and-run check, NOT a performance gate: it must
+    # never fail on a slow result. The integration tier is excluded — it needs a SQL Server.
+    - name: Benchmark smoke run
+      run: dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release --no-build -- --job Dry --filter '*CalculatorBenchmarks*' '*ObjectKindBenchmarks*'
+
     - run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./artifacts
 
   integration:
