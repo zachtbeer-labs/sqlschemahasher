@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using zachtbeer.SqlSchemaHasher;
@@ -37,6 +38,11 @@ public static class MetadataCorpus
 
     private static string SchemaFor(int index) => SchemaNames[index % SchemaNames.Length];
 
+    // The corpus's one job is byte-identical output across machines and runs, so its number formatting
+    // is pinned explicitly here rather than inherited from whatever culture happens to be active in the
+    // process running the benchmark.
+    private static string Inv(int value) => value.ToString(CultureInfo.InvariantCulture);
+
     /// <summary>
     /// A deterministic stand-in for the server-side <c>HASHBYTES('SHA2_256', ...)</c> module hash:
     /// 64 lowercase hex characters, stable for a given seed.
@@ -50,8 +56,8 @@ public static class MetadataCorpus
         {
             var dataType = DataTypes[i % DataTypes.Length];
             var isComputed = i > 0 && i % 7 == 0;
-            var computedDefinition = isComputed ? $"([Col{i - 1}]+(1))" : null;
-            columns.Add(new ColumnSchema($"Col{i}", dataType, MaxLength: 8 * (i % 16 + 1), Precision: 18, Scale: i % 4, IsNullable: i % 3 != 0, IsComputed: isComputed, ComputedDefinition: computedDefinition, IsPersisted: isComputed, CollationName: dataType == "nvarchar" ? "SQL_Latin1_General_CP1_CI_AS" : null, ColumnId: i + 1));
+            var computedDefinition = isComputed ? $"([Col{Inv(i - 1)}]+(1))" : null;
+            columns.Add(new ColumnSchema($"Col{Inv(i)}", dataType, MaxLength: 8 * (i % 16 + 1), Precision: 18, Scale: i % 4, IsNullable: i % 3 != 0, IsComputed: isComputed, ComputedDefinition: computedDefinition, IsPersisted: isComputed, CollationName: dataType == "nvarchar" ? "SQL_Latin1_General_CP1_CI_AS" : null, ColumnId: i + 1));
         }
 
         // Guarantees the owner participates in the hashed value, so two same-shaped tables differ.
@@ -59,15 +65,26 @@ public static class MetadataCorpus
         return columns;
     }
 
-    private static List<IndexSchema> BuildIndexes(SchemaProfile profile, string tableName)
+    /// <summary>
+    /// The name of the column at <paramref name="ordinal"/> as <see cref="BuildColumns"/> renders it:
+    /// column 0 is <paramref name="identityColumnName"/> when the caller has one (tables), since
+    /// <see cref="BuildColumns"/> renames that slot from <c>Col0</c> to <c>&lt;owner&gt;Id</c>; every
+    /// other ordinal, and column 0 for callers with no column list of their own (indexed views), is
+    /// the plain <c>Col&lt;ordinal&gt;</c> name.
+    /// </summary>
+    private static string ColumnNameAt(int ordinal, string? identityColumnName) => ordinal == 0 && identityColumnName is not null ? identityColumnName : $"Col{Inv(ordinal)}";
+
+    private static List<IndexSchema> BuildIndexes(SchemaProfile profile, string tableName, string? identityColumnName)
     {
         var indexes = new List<IndexSchema>(profile.IndexesPerTable);
         for (var i = 0; i < profile.IndexesPerTable; i++)
         {
-            var keyColumns = new List<IndexKeyColumn> { new($"Col{i % profile.ColumnsPerTable}", IsDescendingKey: i % 2 == 1) };
-            var includedColumns = new List<string> { $"Col{(i + 1) % profile.ColumnsPerTable}" };
+            var keyColumnName = ColumnNameAt(i % profile.ColumnsPerTable, identityColumnName);
+            var includedColumnName = ColumnNameAt((i + 1) % profile.ColumnsPerTable, identityColumnName);
+            var keyColumns = new List<IndexKeyColumn> { new(keyColumnName, IsDescendingKey: i % 2 == 1) };
+            var includedColumns = new List<string> { includedColumnName };
             var typeDesc = i == 0 ? "CLUSTERED" : "NONCLUSTERED";
-            indexes.Add(new IndexSchema($"IX_{tableName}_{i}", typeDesc, IsUnique: i == 0, IsUniqueConstraint: false, IsPrimaryKey: i == 0, IsDisabled: false, IgnoreDupKey: false, keyColumns, includedColumns, FilterDefinition: i % 5 == 4 ? $"([Col{i % profile.ColumnsPerTable}] IS NOT NULL)" : null, FillFactor: (byte)(i % 2 == 0 ? 0 : 90)));
+            indexes.Add(new IndexSchema($"IX_{tableName}_{Inv(i)}", typeDesc, IsUnique: i == 0, IsUniqueConstraint: false, IsPrimaryKey: i == 0, IsDisabled: false, IgnoreDupKey: false, keyColumns, includedColumns, FilterDefinition: i % 5 == 4 ? $"([{keyColumnName}] IS NOT NULL)" : null, FillFactor: (byte)(i % 2 == 0 ? 0 : 90)));
         }
 
         return indexes;
@@ -78,11 +95,11 @@ public static class MetadataCorpus
         var tables = new List<TableSchema>(profile.Tables);
         for (var i = 0; i < profile.Tables; i++)
         {
-            var name = $"Table{i}";
+            var name = $"Table{Inv(i)}";
             var schemaName = SchemaFor(i);
             var columns = BuildColumns(profile, name);
-            var indexes = BuildIndexes(profile, name);
-            var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY_KEY_CONSTRAINT", $"PK_{name}", IsSystemNamed: false, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
+            var indexes = BuildIndexes(profile, name, $"{name}Id");
+            var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY KEY", $"PK_{name}", IsSystemNamed: false, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
             var foreignKeys = BuildForeignKeys(profile, i, name);
             var checkConstraints = new List<CheckConstraintSchema> { new($"CK_{name}", "([Col1]>(0))", IsDisabled: false, IsNotTrusted: false) };
             var defaultConstraints = new List<DefaultConstraintSchema> { new($"DF_{name}_Col1", "Col1", "((0))") };
@@ -99,8 +116,8 @@ public static class MetadataCorpus
         for (var i = 0; i < profile.ForeignKeysPerTable && tableIndex > 0; i++)
         {
             var referencedIndex = (tableIndex - 1 - i + profile.Tables) % profile.Tables;
-            var columnPairs = new List<ForeignKeyColumnPair> { new($"Col{i + 1}", $"Table{referencedIndex}Id") };
-            foreignKeys.Add(new ForeignKeyConstraintSchema($"FK_{tableName}_{referencedIndex}", SchemaFor(referencedIndex), $"Table{referencedIndex}", columnPairs, DeleteAction: "NO_ACTION", UpdateAction: "NO_ACTION", IsDisabled: false, IsNotTrusted: false));
+            var columnPairs = new List<ForeignKeyColumnPair> { new($"Col{Inv(i + 1)}", $"Table{Inv(referencedIndex)}Id") };
+            foreignKeys.Add(new ForeignKeyConstraintSchema($"FK_{tableName}_{Inv(referencedIndex)}", SchemaFor(referencedIndex), $"Table{Inv(referencedIndex)}", columnPairs, DeleteAction: "NO_ACTION", UpdateAction: "NO_ACTION", IsDisabled: false, IsNotTrusted: false));
         }
 
         return foreignKeys;
@@ -111,7 +128,7 @@ public static class MetadataCorpus
         var parameters = new List<ParameterSchema>(profile.ParametersPerModule);
         for (var i = 0; i < profile.ParametersPerModule; i++)
         {
-            parameters.Add(new ParameterSchema($"@p{i}", DataTypes[i % DataTypes.Length], MaxLength: 8 * (i % 8 + 1), Precision: 18, Scale: i % 4, IsNullable: true, IsOutput: i % 4 == 3));
+            parameters.Add(new ParameterSchema($"@p{Inv(i)}", DataTypes[i % DataTypes.Length], MaxLength: 8 * (i % 8 + 1), Precision: 18, Scale: i % 4, IsNullable: true, IsOutput: i % 4 == 3));
         }
 
         return parameters;
@@ -122,7 +139,7 @@ public static class MetadataCorpus
         var procedures = new List<StoredProcedureSchema>(profile.StoredProcedures);
         for (var i = 0; i < profile.StoredProcedures; i++)
         {
-            var name = $"usp_Proc{i}";
+            var name = $"usp_Proc{Inv(i)}";
             procedures.Add(new StoredProcedureSchema(SchemaFor(i), name, BuildParameters(profile), DefinitionHash($"proc:{name}")));
         }
 
@@ -134,8 +151,8 @@ public static class MetadataCorpus
         var tableTypes = new List<UserDefinedTableTypeSchema>(profile.TableTypes);
         for (var i = 0; i < profile.TableTypes; i++)
         {
-            var name = $"Type{i}";
-            var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY_KEY_CONSTRAINT", $"PK_{name}", IsSystemNamed: true, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
+            var name = $"Type{Inv(i)}";
+            var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY KEY", $"PK_{name}", IsSystemNamed: true, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
             tableTypes.Add(new UserDefinedTableTypeSchema(SchemaFor(i), name, BuildColumns(profile, name), new List<IndexSchema>(), keyConstraints, new List<CheckConstraintSchema>(), new List<DefaultConstraintSchema>()));
         }
 
@@ -147,9 +164,11 @@ public static class MetadataCorpus
         var views = new List<ViewSchema>(profile.Views);
         for (var i = 0; i < profile.Views; i++)
         {
-            var name = $"vw_View{i}";
-            // Every fifth view is indexed, mirroring the indexed-view path in the calculator.
-            var indexes = i % 5 == 0 ? BuildIndexes(profile, name) : new List<IndexSchema>();
+            var name = $"vw_View{Inv(i)}";
+            // Every fifth view is indexed, mirroring the indexed-view path in the calculator. A view
+            // carries no column list of its own (see ViewSchema's <summary>), so there is no owner
+            // identity column for BuildIndexes to agree with.
+            var indexes = i % 5 == 0 ? BuildIndexes(profile, name, null) : new List<IndexSchema>();
             views.Add(new ViewSchema(SchemaFor(i), name, indexes, DefinitionHash($"view:{name}")));
         }
 
@@ -162,7 +181,7 @@ public static class MetadataCorpus
         var functions = new List<FunctionSchema>(profile.Functions);
         for (var i = 0; i < profile.Functions; i++)
         {
-            var name = $"fn_Function{i}";
+            var name = $"fn_Function{Inv(i)}";
             var typeDesc = typeDescs[i % typeDescs.Length];
             var parameters = BuildParameters(profile);
             // A scalar function's return type is the parameter_id = 0 row.
@@ -183,10 +202,10 @@ public static class MetadataCorpus
         var triggers = new List<TriggerSchema>(profile.Triggers);
         for (var i = 0; i < profile.Triggers; i++)
         {
-            var name = $"tr_Trigger{i}";
+            var name = $"tr_Trigger{Inv(i)}";
             var parentIndex = i % Math.Max(profile.Tables, 1);
             var events = new List<TriggerEventSchema> { new(eventTypes[i % eventTypes.Length], IsFirst: i % 3 == 0, IsLast: false) };
-            triggers.Add(new TriggerSchema(SchemaFor(i), name, SchemaFor(parentIndex), $"Table{parentIndex}", IsDisabled: i % 11 == 0, IsInsteadOfTrigger: i % 7 == 0, IsNotForReplication: false, events, DefinitionHash($"trigger:{name}")));
+            triggers.Add(new TriggerSchema(SchemaFor(i), name, SchemaFor(parentIndex), $"Table{Inv(parentIndex)}", IsDisabled: i % 11 == 0, IsInsteadOfTrigger: i % 7 == 0, IsNotForReplication: false, events, DefinitionHash($"trigger:{name}")));
         }
 
         return triggers;
@@ -197,7 +216,7 @@ public static class MetadataCorpus
         var sequences = new List<SequenceSchema>(profile.Sequences);
         for (var i = 0; i < profile.Sequences; i++)
         {
-            sequences.Add(new SequenceSchema(SchemaFor(i), $"seq_Sequence{i}", "bigint", Precision: 19, StartValue: "1", Increment: "1", MinimumValue: "-9223372036854775808", MaximumValue: "9223372036854775807", IsCycling: i % 2 == 0, IsCached: true, CacheSize: 50));
+            sequences.Add(new SequenceSchema(SchemaFor(i), $"seq_Sequence{Inv(i)}", "bigint", Precision: 19, StartValue: "1", Increment: "1", MinimumValue: "-9223372036854775808", MaximumValue: "9223372036854775807", IsCycling: i % 2 == 0, IsCached: true, CacheSize: 50));
         }
 
         return sequences;
@@ -209,7 +228,7 @@ public static class MetadataCorpus
         for (var i = 0; i < profile.Synonyms; i++)
         {
             var targetIndex = i % Math.Max(profile.Tables, 1);
-            synonyms.Add(new SynonymSchema(SchemaFor(i), $"syn_Synonym{i}", $"[{SchemaFor(targetIndex)}].[Table{targetIndex}]"));
+            synonyms.Add(new SynonymSchema(SchemaFor(i), $"syn_Synonym{Inv(i)}", $"[{SchemaFor(targetIndex)}].[Table{Inv(targetIndex)}]"));
         }
 
         return synonyms;
@@ -222,8 +241,8 @@ public static class MetadataCorpus
         {
             var targetIndex = i % Math.Max(profile.Tables, 1);
             // Alternate object-scoped and column-scoped properties to exercise both resolution paths.
-            var subObjectName = i % 2 == 0 ? null : $"Col{i % profile.ColumnsPerTable}";
-            properties.Add(new ExtendedPropertySchema("OBJECT_OR_COLUMN", SchemaFor(targetIndex), $"Table{targetIndex}", subObjectName, "MS_Description", "nvarchar", $"Synthetic description {i}"));
+            var subObjectName = i % 2 == 0 ? null : $"Col{Inv(i % profile.ColumnsPerTable)}";
+            properties.Add(new ExtendedPropertySchema("OBJECT_OR_COLUMN", SchemaFor(targetIndex), $"Table{Inv(targetIndex)}", subObjectName, "MS_Description", "nvarchar", $"Synthetic description {Inv(i)}"));
         }
 
         return properties;
