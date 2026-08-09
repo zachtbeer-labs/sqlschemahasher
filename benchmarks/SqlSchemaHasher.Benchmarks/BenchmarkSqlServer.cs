@@ -47,8 +47,8 @@ internal static class BenchmarkSqlServer
 
     /// <summary>
     /// Resolves the server to benchmark against: the configured connection string if one is set,
-    /// otherwise LocalDB. No async work remains here, but the signature stays task-shaped because
-    /// every caller is already in an async path.
+    /// otherwise LocalDB. Synchronous — resolving and caching an environment variable needs no
+    /// asynchrony, unlike the database creation/seeding work its caller also does.
     /// </summary>
     private static string EnsureServer()
     {

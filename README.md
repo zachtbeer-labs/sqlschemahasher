@@ -339,7 +339,7 @@ Normalization presets cost nothing measurable: `Strict`, `V1`, `V2` and `Structu
 | 200 tables, 500 procs | 445 ms | 451 ms |
 | 1,000 tables, 2,000 procs | 5.27 s | 5.30 s |
 
-Measured on a local SQL Server LocalDB instance, so these exclude network latency. See [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/docs/performance) for the full tables, per-object-kind breakdown, methodology and caveats.
+Measured on a local SQL Server LocalDB instance, so these exclude network latency. See [Performance](https://zachtbeer-labs.github.io/sqlschemahasher/performance) for the full tables, per-object-kind breakdown, methodology and caveats.
 
 ## Dependencies
 

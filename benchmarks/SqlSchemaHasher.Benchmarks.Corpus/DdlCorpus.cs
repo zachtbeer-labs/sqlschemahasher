@@ -5,9 +5,16 @@ namespace SqlSchemaHasher.Benchmarks.Corpus;
 
 /// <summary>
 /// Renders a <see cref="SchemaProfile"/> into T-SQL that seeds an equivalent real database for the
-/// integration benchmark tier. Object names and counts mirror <see cref="MetadataCorpus"/> so both
-/// tiers describe the same profile — though a seeded database does not extract to byte-identical
-/// metadata, since SQL Server contributes its own defaults and system-named constraints.
+/// integration benchmark tier. Object <em>counts</em> mirror <see cref="MetadataCorpus"/> exactly —
+/// per-object-kind count parity between the two renderers is pinned by test — but the schemas this
+/// renderer produces are deliberately simpler in ways the counts don't capture. It does not model:
+/// computed columns, indexed views, multi-statement table-valued functions (only scalar and inline
+/// TVFs), varied per-parameter types/directions on modules (every module takes a single <c>@p0 int</c>
+/// rather than <see cref="SchemaProfile.ParametersPerModule"/> varied parameters), <c>INSTEAD OF</c>
+/// or disabled triggers (only plain <c>AFTER</c>), column-scoped extended properties (only
+/// object-scoped), and cycling sequences. Beyond these omissions, a seeded database still would not
+/// extract to byte-identical metadata against <see cref="MetadataCorpus"/>'s hand-built values, since
+/// SQL Server contributes its own defaults and system-named constraints.
 ///
 /// Returns ordered batches rather than one string: <c>GO</c> is an SSMS client directive that
 /// <c>SqlCommand</c> rejects, and each module creation must be the first statement in its batch.

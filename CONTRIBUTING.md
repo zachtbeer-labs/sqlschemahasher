@@ -17,6 +17,7 @@ Use [GitHub Issues](https://github.com/zachtbeer-labs/sqlschemahasher/issues). F
 
 - [.NET SDK](https://dotnet.microsoft.com/download) matching the version pinned in `global.json` (the library multi-targets `net6.0` through `net10.0`; building the `net10.0` target requires a 10.0.x SDK)
 - [Docker](https://www.docker.com/) (for integration tests -- Testcontainers spins up SQL Server 2025)
+- [SQL Server LocalDB](https://learn.microsoft.com/sql/database-engine/configure-windows/sql-server-express-localdb) (benchmarks only -- the integration benchmark tier defaults to LocalDB; see Benchmarks below)
 
 ### Build and Test
 
@@ -52,16 +53,19 @@ dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release
 ```
 
 **Integration tier** — end-to-end extraction and hashing against a real database, seeded from
-generated DDL. Uses SQL Server LocalDB, so no Docker is needed. Run it at major and minor releases
-to refresh the published characterization table:
+generated DDL. Uses SQL Server LocalDB by default, so no Docker is needed. Run it at major and minor
+releases to refresh the published characterization table:
 
 ```bash
 dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release -- --anyCategories Integration
 ```
 
-Set `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` to measure against a different server. LocalDB
-excludes network latency, which makes it a cleaner regression signal but understates what a
-networked deployment sees.
+**The LocalDB default only works on Windows** — SQL Server LocalDB has no Linux or macOS build. On
+those platforms, set `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` to point at any reachable SQL
+Server instead — a Docker container works fine here, even though the tier itself needs no Docker on
+Windows. On Windows, set the same variable to measure against a different server. LocalDB excludes
+network latency, which makes it a cleaner regression signal but understates what a networked
+deployment sees.
 
 Close other applications before a run whose results you intend to commit, and note that numbers are
 only comparable across runs on the same machine — BenchmarkDotNet records the host environment in

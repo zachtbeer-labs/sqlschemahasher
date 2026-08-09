@@ -88,7 +88,7 @@ public static class MetadataCorpus
     /// </summary>
     private static string ColumnNameAt(int ordinal, string? identityColumnName) => ordinal == 0 && identityColumnName is not null ? identityColumnName : $"Col{Inv(ordinal)}";
 
-    private static List<IndexSchema> BuildIndexes(SchemaProfile profile, string tableName, string? identityColumnName)
+    private static List<IndexSchema> BuildIndexes(SchemaProfile profile, string tableName, string? identityColumnName, int ownerIndex)
     {
         var indexes = new List<IndexSchema>(profile.IndexesPerTable);
         for (var i = 0; i < profile.IndexesPerTable; i++)
@@ -98,7 +98,11 @@ public static class MetadataCorpus
             var keyColumns = new List<IndexKeyColumn> { new(keyColumnName, IsDescendingKey: i % 2 == 1) };
             var includedColumns = new List<string> { includedColumnName };
             var typeDesc = i == 0 ? "CLUSTERED" : "NONCLUSTERED";
-            indexes.Add(new IndexSchema($"IX_{tableName}_{Inv(i)}", typeDesc, IsUnique: i == 0, IsUniqueConstraint: false, IsPrimaryKey: i == 0, IsDisabled: false, IgnoreDupKey: false, keyColumns, includedColumns, FilterDefinition: i % 5 == 4 ? $"([{keyColumnName}] IS NOT NULL)" : null, FillFactor: (byte)(i % 2 == 0 ? 0 : 90)));
+            // "Every 5th index is filtered" needs a counter across every index a profile produces, not
+            // just this owner's own IndexesPerTable: IndexesPerTable alone tops out at 4 (Large), so a
+            // per-owner i % 5 == 4 check would never fire in any shipped profile.
+            var globalOrdinal = (ownerIndex * profile.IndexesPerTable) + i;
+            indexes.Add(new IndexSchema($"IX_{tableName}_{Inv(i)}", typeDesc, IsUnique: i == 0, IsUniqueConstraint: false, IsPrimaryKey: i == 0, IsDisabled: false, IgnoreDupKey: false, keyColumns, includedColumns, FilterDefinition: globalOrdinal % 5 == 4 ? $"([{keyColumnName}] IS NOT NULL)" : null, FillFactor: (byte)(i % 2 == 0 ? 0 : 90)));
         }
 
         return indexes;
@@ -112,7 +116,7 @@ public static class MetadataCorpus
             var name = $"Table{Inv(i)}";
             var schemaName = SchemaFor(i);
             var columns = BuildColumns(profile, name);
-            var indexes = BuildIndexes(profile, name, $"{name}Id");
+            var indexes = BuildIndexes(profile, name, $"{name}Id", i);
             var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY KEY", $"PK_{name}", IsSystemNamed: false, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
             var foreignKeys = BuildForeignKeys(profile, i, name);
             var checkConstraints = new List<CheckConstraintSchema> { new($"CK_{name}", "([Col1]>(0))", IsDisabled: false, IsNotTrusted: false) };
@@ -182,7 +186,7 @@ public static class MetadataCorpus
             // Every fifth view is indexed, mirroring the indexed-view path in the calculator. A view
             // carries no column list of its own (see ViewSchema's <summary>), so there is no owner
             // identity column for BuildIndexes to agree with.
-            var indexes = i % 5 == 0 ? BuildIndexes(profile, name, null) : new List<IndexSchema>();
+            var indexes = i % 5 == 0 ? BuildIndexes(profile, name, null, i) : new List<IndexSchema>();
             views.Add(new ViewSchema(SchemaFor(i), name, indexes, DefinitionHash($"view:{name}")));
         }
 
@@ -254,9 +258,11 @@ public static class MetadataCorpus
         for (var i = 0; i < profile.ExtendedProperties; i++)
         {
             var targetIndex = i % Math.Max(profile.Tables, 1);
+            var targetTableName = $"Table{Inv(targetIndex)}";
             // Alternate object-scoped and column-scoped properties to exercise both resolution paths.
-            var subObjectName = i % 2 == 0 ? null : $"Col{Inv(i % profile.ColumnsPerTable)}";
-            properties.Add(new ExtendedPropertySchema("OBJECT_OR_COLUMN", SchemaFor(targetIndex), $"Table{Inv(targetIndex)}", subObjectName, "MS_Description", "nvarchar", $"Synthetic description {Inv(i)}"));
+            // ColumnNameAt keeps the named column real: BuildColumns renames ordinal 0 to "{owner}Id".
+            var subObjectName = i % 2 == 0 ? null : ColumnNameAt(i % profile.ColumnsPerTable, $"{targetTableName}Id");
+            properties.Add(new ExtendedPropertySchema("OBJECT_OR_COLUMN", SchemaFor(targetIndex), targetTableName, subObjectName, "MS_Description", "nvarchar", $"Synthetic description {Inv(i)}"));
         }
 
         return properties;

@@ -26,6 +26,15 @@ realistic range.
 | Medium | 200 | 12 | 3 | 500 | 75 | 40 | 40 | 15 | 200 |
 | Large | 1,000 | 16 | 4 | 2,000 | 300 | 150 | 150 | 50 | 1,000 |
 
+The object counts above are honored identically by both renderers behind the two tiers below, but
+the end-to-end tier's seeded database is structurally simpler than the hash-calculation tier's
+in-memory corpus in ways the counts don't show: no computed columns, no indexed views, no
+multi-statement table-valued functions, single-parameter modules instead of varied parameter lists,
+plain `AFTER` triggers only (no `INSTEAD OF`, none disabled), object-scoped extended properties only
+(no column-scoped ones), and no cycling sequences. Don't read the two tables below as describing
+identical schemas — see [`DdlCorpus`](https://github.com/zachtbeer-labs/sqlschemahasher/blob/main/benchmarks/SqlSchemaHasher.Benchmarks.Corpus/DdlCorpus.cs)
+for the full list of what the DDL tier does not model.
+
 ## End to end
 
 `GetHashAsync` against a live database, alongside `ExtractSchemaAsync` alone so the split is
@@ -35,10 +44,19 @@ visible. Default options (`SchemaHashOptions.V2`).
 |---|---:|---:|---:|
 | Small | 56.2 ms | 57.0 ms | 1.4% |
 | Medium | 444.7 ms | 450.6 ms | 1.3% |
-| Large | 5.27 s | 5.30 s | 0.5% |
+| Large | 5.27 s | 5.30 s | &lt;1% (within run-to-run noise) |
 
-**Extraction dominates.** The difference between the two columns is the entire hash computation. If
-you want a schema hash to be faster, the lever is the number of catalog round-trips, not the hash.
+**Extraction dominates.** At Small and Medium, the difference between the two columns is the entire
+hash computation — 0.82 ms and 5.90 ms respectively, both well outside the ±0.3–3.0 ms error bars on
+these runs, so that gap is a real measurement. At Large it isn't: the 25 ms gap between 5,271.61 ms
+± 50.702 ms and 5,297.04 ms ± 65.548 ms is smaller than either measurement's own error, and
+BenchmarkDotNet's `Ratio` column reports both rows as `1.00` — indistinguishable at this resolution.
+It also disagrees with the hash-calculation tier below, which measures Large `V2` hashing at 35.5 ms
+on its own, larger than the entire end-to-end delta observed here. The hash-calculation tier hashes
+pre-extracted metadata directly and is the reliable source for hash cost at every size; the
+end-to-end delta above is only a usable estimate where it clears the error bars, which holds at Small
+and Medium but not at Large. If you want a schema hash to be faster, the lever is the number of
+catalog round-trips, not the hash.
 
 A practical consequence: if you already hold a `SchemaMetadata` from `ExtractSchemaAsync`, computing
 additional hashes from it with different options via `SqlSchemaHash.ComputeHash` is nearly free
@@ -64,7 +82,8 @@ measured.
 
 ## Cost by object kind
 
-Each object kind hashed in isolation, at the Medium profile with `V2`, relative to tables.
+Each object kind hashed in isolation, at the Medium profile with `V2`. "Share of total" is each
+kind's mean against the Medium `V2` total from the hash-calculation table above (6.22 ms).
 
 | Object kind | Mean | Share of total |
 |---|---:|---:|
@@ -80,7 +99,7 @@ all the work.
 Tables dominate because each carries columns, indexes and four kinds of constraint, all of which are
 sorted and streamed. Module hashing is comparatively cheap because module bodies are hashed
 **server-side** with `HASHBYTES` during extraction — the text never crosses the wire, and the
-client only hashes the resulting digest along with the signature.
+client only hashes the server-computed hash value along with the signature.
 
 ## Methodology
 
@@ -107,6 +126,11 @@ are committed under
   or heavy extended-property use will differ.
 - **One machine, one run.** Absolute values are specific to the hardware above. Ratios and scaling
   behavior travel better than milliseconds do.
+- **The end-to-end tier's LocalDB default is Windows-only.** SQL Server LocalDB has no Linux or
+  macOS build. Reproducing the end-to-end numbers elsewhere requires
+  `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` pointed at any reachable SQL Server, including a
+  Docker container — see [Reproducing](#reproducing) below. The hash-calculation tier has no
+  database and runs anywhere.
 
 ## Reproducing
 
@@ -117,9 +141,11 @@ cd sqlschemahasher
 # Hash calculation only — no database required
 dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release
 
-# End to end — uses SQL Server LocalDB, no Docker required
+# End to end — uses SQL Server LocalDB by default, no Docker required (Windows only; see below)
 dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release -- --anyCategories Integration
 ```
 
-Set `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` to measure against a different server, for example
-to see what network latency costs you.
+The LocalDB default only works on Windows — SQL Server LocalDB has no Linux or macOS build. On other
+platforms, or to measure against a different server (for example to see what network latency costs
+you), set `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` to point at any reachable SQL Server,
+including a Docker container.

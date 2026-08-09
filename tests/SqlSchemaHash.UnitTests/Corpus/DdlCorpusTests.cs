@@ -7,7 +7,7 @@ namespace SqlSchemaHash.UnitTests.Corpus;
 /// <summary>
 /// The DDL renderer seeds the integration-tier database. These tests cover generation only —
 /// that the script actually executes against SQL Server is proven by running the integration
-/// benchmarks, which is a manual, Docker-dependent step.
+/// benchmarks, which is a manual step against SQL Server LocalDB (no Docker required).
 /// </summary>
 [TestClass]
 public class DdlCorpusTests
@@ -32,10 +32,37 @@ public class DdlCorpusTests
         CountOccurrences(script, "CREATE TABLE ").ShouldBe(profile.Tables);
         CountOccurrences(script, "CREATE PROCEDURE ").ShouldBe(profile.StoredProcedures);
         CountOccurrences(script, "CREATE VIEW ").ShouldBe(profile.Views);
+        // Both the scalar and inline-table-valued branches emit "CREATE FUNCTION ", so this counts the profile's total function count.
+        CountOccurrences(script, "CREATE FUNCTION ").ShouldBe(profile.Functions);
         CountOccurrences(script, "CREATE TRIGGER ").ShouldBe(profile.Triggers);
         CountOccurrences(script, "CREATE SEQUENCE ").ShouldBe(profile.Sequences);
         CountOccurrences(script, "CREATE SYNONYM ").ShouldBe(profile.Synonyms);
         CountOccurrences(script, "CREATE TYPE ").ShouldBe(profile.TableTypes);
+    }
+
+    // The published profile table promises the two renderers agree on object counts (they differ
+    // materially in what those objects look like — see DdlCorpus's <summary> — but not in how many
+    // there are). Pin that parity per object kind and per profile so a future profile change can't
+    // widen the gap silently.
+    [TestMethod]
+    [DataRow("Small")]
+    [DataRow("Medium")]
+    [DataRow("Large")]
+    public void Script_ObjectCountsMatchMetadataCorpus(string profileName)
+    {
+        var profile = SchemaProfile.All.Single(p => p.Name == profileName);
+        var script = string.Join("\n", DdlCorpus.Script(profile));
+        var metadata = MetadataCorpus.Build(profile);
+
+        CountOccurrences(script, "CREATE TABLE ").ShouldBe(metadata.Tables.Count, $"[{profile.Name}] table count");
+        CountOccurrences(script, "CREATE PROCEDURE ").ShouldBe(metadata.StoredProcedures.Count, $"[{profile.Name}] stored procedure count");
+        CountOccurrences(script, "CREATE VIEW ").ShouldBe(metadata.Views.Count, $"[{profile.Name}] view count");
+        CountOccurrences(script, "CREATE FUNCTION ").ShouldBe(metadata.Functions.Count, $"[{profile.Name}] function count");
+        CountOccurrences(script, "CREATE TRIGGER ").ShouldBe(metadata.Triggers.Count, $"[{profile.Name}] trigger count");
+        CountOccurrences(script, "CREATE SEQUENCE ").ShouldBe(metadata.Sequences.Count, $"[{profile.Name}] sequence count");
+        CountOccurrences(script, "CREATE SYNONYM ").ShouldBe(metadata.Synonyms.Count, $"[{profile.Name}] synonym count");
+        CountOccurrences(script, "CREATE TYPE ").ShouldBe(metadata.UserDefinedTableTypes.Count, $"[{profile.Name}] table type count");
+        CountOccurrences(script, "EXEC sp_addextendedproperty ").ShouldBe(metadata.ExtendedProperties.Count, $"[{profile.Name}] extended property count");
     }
 
     [TestMethod]
