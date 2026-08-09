@@ -82,4 +82,33 @@ public class MetadataCorpusTests
 
         Should.NotThrow(() => CorpusValidation.Validate(schema, SchemaProfile.Small));
     }
+
+    [TestMethod]
+    public void OnlyTables_RetainsTablesAndDropsEverythingElse()
+    {
+        var full = MetadataCorpus.Build(SchemaProfile.Small);
+
+        var tablesOnly = MetadataCorpus.OnlyTables(full);
+
+        tablesOnly.Tables.Count.ShouldBe(full.Tables.Count);
+        tablesOnly.StoredProcedures.ShouldBeEmpty();
+        tablesOnly.Views.ShouldBeEmpty();
+        tablesOnly.Functions.ShouldBeEmpty();
+        tablesOnly.Triggers.ShouldBeEmpty();
+        tablesOnly.ExtendedProperties.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void OnlyModules_RetainsProceduresViewsFunctionsAndTriggers()
+    {
+        var full = MetadataCorpus.Build(SchemaProfile.Small);
+
+        var modulesOnly = MetadataCorpus.OnlyModules(full);
+
+        modulesOnly.StoredProcedures.Count.ShouldBe(full.StoredProcedures.Count);
+        modulesOnly.Views.Count.ShouldBe(full.Views.Count);
+        modulesOnly.Functions.Count.ShouldBe(full.Functions.Count);
+        modulesOnly.Triggers.Count.ShouldBe(full.Triggers.Count);
+        modulesOnly.Tables.ShouldBeEmpty();
+    }
 }

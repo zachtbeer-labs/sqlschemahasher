@@ -36,6 +36,18 @@ public static class MetadataCorpus
         return new SchemaMetadata(tables, procedures, tableTypes, views, functions, triggers, sequences, synonyms, extendedProperties);
     }
 
+    /// <summary>Tables only — isolates the table, column, index and constraint hashing paths.</summary>
+    public static SchemaMetadata OnlyTables(SchemaMetadata schema) => Empty with { Tables = schema.Tables };
+
+    /// <summary>Programmable modules only — stored procedures, views, functions and triggers.</summary>
+    public static SchemaMetadata OnlyModules(SchemaMetadata schema) => Empty with { StoredProcedures = schema.StoredProcedures, Views = schema.Views, Functions = schema.Functions, Triggers = schema.Triggers };
+
+    /// <summary>User-defined table types only.</summary>
+    public static SchemaMetadata OnlyTableTypes(SchemaMetadata schema) => Empty with { UserDefinedTableTypes = schema.UserDefinedTableTypes };
+
+    /// <summary>Extended properties only.</summary>
+    public static SchemaMetadata OnlyExtendedProperties(SchemaMetadata schema) => Empty with { ExtendedProperties = schema.ExtendedProperties };
+
     private static string SchemaFor(int index) => SchemaNames[index % SchemaNames.Length];
 
     // The corpus's one job is byte-identical output across machines and runs, so its number formatting
