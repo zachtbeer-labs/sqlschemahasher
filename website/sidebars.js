@@ -11,6 +11,7 @@ const sidebars = {
     'intro',
     'getting-started',
     'what-gets-hashed',
+    'known-limitations',
     'options-and-presets',
     'comparing-hashes',
     'performance',

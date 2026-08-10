@@ -1,7 +1,7 @@
 ---
 id: options-and-presets
 title: Options & Presets
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Options & Presets

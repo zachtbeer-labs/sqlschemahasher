@@ -40,6 +40,4 @@ The following are **not** read, so adding, altering, or dropping them does not c
 
 See the [FAQ](./faq.md) for the reasoning behind these scope decisions and other frequently-asked design questions.
 
-## Known limitation: definition-text rendering drift
-
-CHECK constraint, DEFAULT constraint, computed-column, and filtered-index definitions are hashed as SQL Server renders them. Different SQL Server major versions can render the same expression differently (spacing, parenthesization, casing of built-in functions), which can produce a spurious `Different` comparison across server versions even though nothing semantically changed. Compare hashes taken from the same SQL Server major version to avoid this. See [BUGS.md](https://github.com/zachtbeer-labs/sqlschemahasher/blob/main/BUGS.md#definition-text-rendering-drift) for details — this is intentionally not normalized in v2.
+A longer list of narrower, catalog-field-level gaps — including definition-text rendering drift across SQL Server versions — lives on the [Known Limitations](./known-limitations.md) page.

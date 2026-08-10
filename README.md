@@ -195,7 +195,7 @@ See the [FAQ](https://zachtbeer-labs.github.io/sqlschemahasher/faq) for the reas
 
 ### Known limitation: definition-text rendering drift
 
-CHECK constraint, DEFAULT constraint, computed-column, and filtered-index definitions are hashed as SQL Server renders them. Different SQL Server major versions can render the same expression differently (spacing, parenthesization, casing of built-in functions), which can produce a spurious `Different` comparison across server versions even though nothing semantically changed. Compare hashes taken from the same SQL Server major version to avoid this. See `BUGS.md` for details — this is intentionally not normalized in v2.
+CHECK constraint, DEFAULT constraint, computed-column, and filtered-index definitions are hashed as SQL Server renders them. Different SQL Server major versions can render the same expression differently (spacing, parenthesization, casing of built-in functions), which can produce a spurious `Different` comparison across server versions even though nothing semantically changed. Compare hashes taken from the same SQL Server major version to avoid this. See the docs site's [Known Limitations](https://zachtbeer-labs.github.io/sqlschemahasher/known-limitations) page for details and other coverage gaps — this is intentionally not normalized.
 
 ## Presets
 
