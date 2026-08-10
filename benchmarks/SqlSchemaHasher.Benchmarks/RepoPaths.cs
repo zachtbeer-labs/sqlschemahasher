@@ -7,17 +7,17 @@ namespace SqlSchemaHasher.Benchmarks;
 internal static class RepoPaths
 {
     /// <summary>
-    /// Walks up from the executable location to the directory containing <c>SqlSchemaHasher.sln</c>.
+    /// Walks up from the executable location to the directory containing <c>SqlSchemaHasher.slnx</c>.
     /// </summary>
     public static string RepoRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "SqlSchemaHasher.sln")))
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "SqlSchemaHasher.slnx")))
         {
             directory = directory.Parent;
         }
 
-        return directory?.FullName ?? throw new InvalidOperationException("Could not locate SqlSchemaHasher.sln above the benchmark output directory. Run the benchmarks from inside the repository.");
+        return directory?.FullName ?? throw new InvalidOperationException("Could not locate SqlSchemaHasher.slnx above the benchmark output directory. Run the benchmarks from inside the repository.");
     }
 
     /// <summary>

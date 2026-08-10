@@ -361,7 +361,7 @@ gh attestation verify zachtbeer.SqlSchemaHasher.<version>.nupkg \
 ```bash
 dotnet test tests/SqlSchemaHash.UnitTests          # fast, no database required
 dotnet test tests/SqlSchemaHash.IntegrationTests   # requires Docker
-dotnet test SqlSchemaHasher.sln                    # runs both
+dotnet test SqlSchemaHasher.slnx                    # runs both
 ```
 
 Integration tests use [Testcontainers](https://testcontainers.com/) to spin up SQL Server 2025 in Docker, so Docker must be running.

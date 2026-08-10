@@ -28,8 +28,8 @@ jobs:
         key: nuget-${{ hashFiles('**/packages.lock.json') }}
         restore-keys: nuget-
 
-    - run: dotnet restore SqlSchemaHasher.sln --locked-mode
-    - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
+    - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
     - run: dotnet test tests/SqlSchemaHash.UnitTests/SqlSchemaHash.UnitTests.csproj -c Release --no-build --verbosity normal
 
     # Executes each no-database benchmark exactly once with no statistics, so a benchmark that
@@ -67,9 +67,9 @@ jobs:
         key: nuget-${{ hashFiles('**/packages.lock.json') }}
         restore-keys: nuget-
 
-    - run: dotnet restore SqlSchemaHasher.sln --locked-mode
-    - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
-    - run: dotnet test SqlSchemaHasher.sln -c Release --no-build --verbosity normal
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
+    - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
+    - run: dotnet test SqlSchemaHasher.slnx -c Release --no-build --verbosity normal
 
   security-scan:
     runs-on: ubuntu-latest
@@ -82,11 +82,11 @@ jobs:
           9.0.x
           10.0.x
 
-    - run: dotnet restore SqlSchemaHasher.sln --locked-mode
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
 
     - name: Check for vulnerable packages
       run: |
-        dotnet list SqlSchemaHasher.sln package --vulnerable --include-transitive | tee vulnerable.txt
+        dotnet list SqlSchemaHasher.slnx package --vulnerable --include-transitive | tee vulnerable.txt
         if grep -q "has the following vulnerable packages" vulnerable.txt; then
           echo "Vulnerable packages found."
           exit 1

@@ -22,7 +22,7 @@ Use [GitHub Issues](https://github.com/zachtbeer-labs/sqlschemahasher/issues). F
 ### Build and Test
 
 ```bash
-dotnet build SqlSchemaHasher.sln
+dotnet build SqlSchemaHasher.slnx
 dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 ```
 
@@ -37,7 +37,7 @@ Tests are split into two projects:
   dotnet test tests/SqlSchemaHash.IntegrationTests
   ```
 
-`dotnet test SqlSchemaHasher.sln` runs both.
+`dotnet test SqlSchemaHasher.slnx` runs both.
 
 ### Benchmarks
 

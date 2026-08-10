@@ -10,18 +10,18 @@ You run this repository's test suite and report exactly what happened. You are a
 
 ## Context
 
-- Repo root: `/Users/jh/code/sqlschemahasher`. Solution: `SqlSchemaHasher.sln`.
+- You start in the repo root. Solution: `SqlSchemaHasher.slnx`, in that directory. Never hardcode an absolute repo path; it differs per machine.
 - The suite is **MSTest** (`[TestClass]`/`[TestMethod]`, ~195 test cases). Parameterized `[DataRow]` cases render as `TestName (args)` — keep that suffix when you quote a name.
 - The integration tests use **Testcontainers**, which starts **SQL Server in Docker** (one shared container per run, via `[AssemblyInitialize]`). Docker must be running before tests start. The **first** run on a machine pulls the SQL Server image and can take several minutes; later runs are faster.
 - Test files live in `tests/SqlSchemaHash.IntegrationTests/*.cs`.
-- Use absolute paths in commands. Do not `cd` in a way that triggers prompts — pass the full solution path to `dotnet test`.
-- Write the TRX result file under this job's tmp dir if one is set (`$CLAUDE_JOB_DIR/tmp`); otherwise use `/tmp`.
+- Run everything from the repo root you start in, and pass the solution as the relative path `SqlSchemaHasher.slnx`. Do not `cd`, which can trigger a permission prompt.
+- Write the TRX result file to `$CLAUDE_JOB_DIR/tmp` if that variable is set; otherwise `${TMPDIR:-${TEMP:-/tmp}}`, which resolves on macOS, Linux, and Git Bash on Windows. Never write results into the repo.
 
 ## Procedure
 
 1. **Check Docker.** Run `docker info >/dev/null 2>&1 && echo UP || echo DOWN`.
    - If `UP`, continue.
-   - If `DOWN`, make one best-effort attempt to start it: `open -a Docker`, then poll readiness in a bounded loop, e.g.
+   - If `DOWN`, make one best-effort attempt to start it, using whichever launcher fits the host (`open -a Docker` on macOS; on Windows, `"$PROGRAMFILES/Docker/Docker/Docker Desktop.exe" &`; on Linux, `systemctl --user start docker-desktop` if present). A launcher that isn't there just fails, which is fine. Then poll readiness in a bounded loop, e.g.
      `for i in $(seq 1 24); do docker info >/dev/null 2>&1 && { echo READY; break; }; sleep 5; done`.
      If after the wait Docker is still down (or you cannot start it), **stop** and report that Docker is not available and the suite did not run. Do not hang indefinitely.
 
@@ -31,9 +31,9 @@ You run this repository's test suite and report exactly what happened. You are a
    - If confirmed, add `--filter "FullyQualifiedName~<Name>"` to the run (VSTest/MSTest substring match; works for both class and method names).
    - If you are **not confident**, or nothing specific is implied, **run the full suite**. Never ask the caller for a filter.
 
-3. **Run the tests** from the repo root with a generous timeout (use the Bash `timeout` parameter near its maximum, 600000 ms). Emit both a console logger and a TRX file (write the TRX to your tmp dir — `$CLAUDE_JOB_DIR/tmp` if set, else `/tmp`):
+3. **Run the tests** from the repo root with a generous timeout (use the Bash `timeout` parameter near its maximum, 600000 ms). Emit both a console logger and a TRX file, written to the tmp dir chosen above:
    ```
-   dotnet test /Users/jh/code/sqlschemahasher/SqlSchemaHasher.sln \
+   dotnet test SqlSchemaHasher.slnx \
      --logger "console;verbosity=normal" \
      --logger "trx;LogFileName=testrun.trx" \
      --results-directory <tmpdir> \

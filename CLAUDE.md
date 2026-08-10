@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
-This is a .NET 9 class library with integration tests. The solution file is `SqlSchemaHasher.sln` at the repo root.
+This is a .NET 9 class library with integration tests. The solution file is `SqlSchemaHasher.slnx` at the repo root.
 
 ```bash
-dotnet build SqlSchemaHasher.sln
-dotnet test SqlSchemaHasher.sln
+dotnet build SqlSchemaHasher.slnx
+dotnet test SqlSchemaHasher.slnx
 dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 ```
 
