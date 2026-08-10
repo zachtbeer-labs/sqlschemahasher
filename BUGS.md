@@ -280,6 +280,19 @@ genuine behavioral difference for client tooling. As with `WITH CHECK OPTION` ab
 the raw definition text and so happens to be reflected in `DefinitionHash` under default options, but
 disappears entirely from the comparison surface under `ModuleNormalization.IgnoreBodyText`.
 
+### Synonym explicit ownership (`ALTER AUTHORIZATION`) not captured
+
+`sys.synonyms.principal_id` (inherited from `sys.objects`) is not extracted or hashed;
+`SynonymSchema` has no corresponding field. It is `NULL` for a synonym owned by its schema's default
+owner and becomes a real principal id only after an explicit `ALTER AUTHORIZATION ON <synonym> TO
+<principal>`, the same "owner override, distinct from a system artifact" pattern already reasoned about
+for other object kinds elsewhere in this file. Resolving it to a principal name (the same id-to-name
+technique already used for `SCHEMA_NAME`/`OBJECT_NAME` lookups) would let the hash detect a synonym's
+ownership being reassigned; currently, running `ALTER AUTHORIZATION` on a synonym does not change the
+hash. Note this gap is not unique to synonyms: no object kind in this codebase currently captures
+`sys.objects.principal_id`/explicit ownership, so this entry is the synonym instance of a broader,
+currently-untracked gap.
+
 ### View schema-binding (`WITH SCHEMABINDING`) not captured
 
 `sys.sql_modules.is_schema_bound` is not extracted or hashed for views; `ViewSchema` has no
@@ -291,6 +304,23 @@ it is incidentally reflected in `DefinitionHash` under default options) but is i
 `ModuleNormalization.IgnoreBodyText`, and there is no discrete field a caller can inspect independent of
 body-text diffing — unlike, e.g., `FunctionSchema.TypeDesc`, which is captured unconditionally precisely
 so scalar/TVF identity survives `IgnoreBodyText`.
+
+### Unreferenced alias scalar types not captured as standalone objects
+
+An alias scalar type (`CREATE TYPE dbo.OrderTotal FROM DECIMAL(9,2) NOT NULL`) has no dedicated entry in
+`SchemaMetadata` — unlike every other in-scope object kind (tables, stored procedures, table types,
+views, functions, triggers, sequences, synonyms), which each have their own driving catalog query and
+their own list. `SchemaExtractor` never queries `sys.types` for `is_user_defined = 1 AND is_assembly_type
+= 0` on its own; the alias type's identity (schema-qualified name plus its underlying base
+type/length/precision/scale/nullability) is observed only as a side effect of `EffectiveDataType` being
+invoked when a table column, table-type column, procedure/function parameter, or sequence references it
+via `user_type_id`. An alias type that exists but is not referenced anywhere is therefore completely
+invisible: `CREATE TYPE`, `DROP TYPE`, or dropping-and-recreating over a different base
+type/length/precision/scale/nullability while the type is unused does not change the hash.
+
+**Workaround:** none currently — this would require treating alias scalar types as their own
+`SchemaMetadata` list, extracted directly from `sys.types` rather than piggybacked on the objects that
+reference them.
 
 ## Resolved in v2
 
