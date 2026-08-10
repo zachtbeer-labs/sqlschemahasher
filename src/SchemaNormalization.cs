@@ -8,10 +8,12 @@ namespace zachtbeer.SqlSchemaHasher;
 // layout with the pre-existing values, the Strict baseline is byte-for-byte hash-compatible with
 // earlier output.
 //
-// The named combos (Strict/Structural) are deliberately defined to match the semantics of the
-// existing SchemaHashOptions presets so their hashes are unchanged; whether the newer physical /
-// enforcement / collation bits should be folded into a preset is a separate decision (the presets
-// round) and is intentionally NOT done here.
+// Structural answers "is the schema logically the same?", so it folds in the bits that describe
+// physical layout and enforcement state — index storage/locking options and disabled state, and a
+// constraint's disabled/untrusted/NOT-FOR-REPLICATION state. It deliberately does NOT fold in the
+// Columns or Tables loosening bits: collation is semantic (case sensitivity changes query results)
+// and an identity seed is real schema, so neither is layout noise. A further round of opinionated
+// preset definitions is planned post-2.0; V1 and V2 stay fully exact and are not affected by it.
 
 /// <summary>
 /// Normalization of table-level facets: table column order and identity/temporal metadata.
@@ -111,11 +113,13 @@ public enum IndexNormalization
 	IgnoreDisabled = 1 << 7,
 
 	/// <summary>
-	/// Structural comparison: ignore index names, normalize clustering placement, and ignore key sort
-	/// order. Matches the existing Structural preset (physical storage / lock / disabled bits are not
-	/// folded in here — that is a presets-round decision).
+	/// Structural comparison: ignore index names, normalize rowstore clustering placement, ignore key
+	/// sort order, and neutralize the physical storage/locking options (FILLFACTOR, PAD_INDEX,
+	/// ALLOW_ROW_LOCKS / ALLOW_PAGE_LOCKS) and the disabled state. What remains compared is the index's
+	/// shape: its key and included columns, uniqueness and primary-key backing, filter predicate, and
+	/// non-rowstore kind (columnstore, XML, spatial, hash).
 	/// </summary>
-	Structural = IgnoreNames | NormalizeClustering | IgnoreSortOrder,
+	Structural = IgnoreNames | NormalizeClustering | IgnoreSortOrder | IgnoreFillFactor | IgnorePadIndex | IgnoreLockOptions | IgnoreDisabled,
 }
 
 /// <summary>
@@ -152,8 +156,12 @@ public enum ConstraintNormalization
 	/// <summary>Neutralize a FOREIGN KEY / CHECK constraint's NOT FOR REPLICATION flag.</summary>
 	IgnoreNotForReplication = 1 << 4,
 
-	/// <summary>Structural comparison: ignore constraint names. Matches the existing Structural preset.</summary>
-	Structural = IgnoreNames,
+	/// <summary>
+	/// Structural comparison: ignore constraint names and neutralize enforcement state (disabled,
+	/// untrusted, NOT FOR REPLICATION). What remains compared is what the constraint actually declares:
+	/// its type, key columns, CHECK predicate, DEFAULT expression, and foreign-key target and actions.
+	/// </summary>
+	Structural = IgnoreNames | IgnoreDisabled | IgnoreTrust | IgnoreNotForReplication,
 }
 
 /// <summary>

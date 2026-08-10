@@ -73,7 +73,7 @@ internal sealed class SchemaExtractor
 
 		var tables = await ExtractTablesAsync(connection, IsIgnored, majorVersion, engineEdition, columnsByObjectId, indexesByObjectId, keyConstraintsByObjectId, foreignKeysByObjectId, checkConstraintsByObjectId, defaultConstraintsByObjectId, cancellationToken);
 		var storedProcedures = await ExtractStoredProceduresAsync(connection, IsIgnored, definitionHashExpr, paramsByOwner, cancellationToken);
-		var userDefinedTableTypes = await ExtractUserDefinedTableTypesAsync(connection, IsIgnored, columnsByObjectId, keyConstraintsByObjectId, checkConstraintsByObjectId, defaultConstraintsByObjectId, cancellationToken);
+		var userDefinedTableTypes = await ExtractUserDefinedTableTypesAsync(connection, IsIgnored, columnsByObjectId, indexesByObjectId, keyConstraintsByObjectId, checkConstraintsByObjectId, defaultConstraintsByObjectId, cancellationToken);
 		var views = await ExtractViewsAsync(connection, IsIgnored, definitionHashExpr, indexesByObjectId, cancellationToken);
 		var functions = await ExtractFunctionsAsync(connection, IsIgnored, definitionHashExpr, paramsByOwner, cancellationToken);
 		var triggers = await ExtractTriggersAsync(connection, IsIgnored, definitionHashExpr, cancellationToken);
@@ -180,8 +180,10 @@ internal sealed class SchemaExtractor
 		// behavioral attributes of the index. fill_factor / is_padded / allow_row_locks / allow_page_locks
 		// are the physical storage and locking options (WITH (FILLFACTOR=…, PAD_INDEX=…, ALLOW_*_LOCKS=…)).
 		// Driven from sys.objects with type IN ('U', 'V') so the same result dictionary (keyed by
-		// object_id) distributes indexes to both tables and indexed views, mirroring how table-type
-		// columns distribute to table types.
+		// object_id) distributes indexes to tables, indexed views and table types alike, mirroring how
+		// table-type columns distribute to table types. A table type's backing object is sys.objects
+		// type 'TT' keyed by its type_table_object_id, so its inline INDEX declarations (supported since
+		// SQL Server 2014) land in the same dictionary as everything else.
 		const string indexesQuery = @"
 			SELECT
 				o.object_id AS ObjectId,
@@ -200,22 +202,25 @@ internal sealed class SchemaExtractor
 				ic.key_ordinal AS KeyOrdinal,
 				ic.is_included_column AS IsIncluded,
 				CAST(ISNULL(ic.is_descending_key, 0) AS bit) AS IsDescendingKey,
-				i.filter_definition AS FilterDefinition
+				i.filter_definition AS FilterDefinition,
+				xi.secondary_type_desc AS XmlSecondaryTypeDesc,
+				xi.xml_index_type_description AS XmlIndexTypeDescription
 			FROM sys.objects o
 			INNER JOIN sys.indexes i ON o.object_id = i.object_id
 			INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
 			INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-			WHERE o.type IN ('U', 'V') AND i.name IS NOT NULL AND i.is_hypothetical = 0
+			LEFT JOIN sys.xml_indexes xi ON i.object_id = xi.object_id AND i.index_id = xi.index_id
+			WHERE o.type IN ('U', 'V', 'TT') AND i.name IS NOT NULL AND i.is_hypothetical = 0
 			ORDER BY o.object_id, i.name, ic.key_ordinal";
 
-		var rows = await connection.QueryAsync<(int ObjectId, string IndexName, string TypeDesc, bool IsUnique, bool IsUniqueConstraint, bool IsPrimaryKey, bool IsDisabled, bool IgnoreDupKey, byte FillFactor, bool IsPadded, bool AllowRowLocks, bool AllowPageLocks, string ColumnName, int KeyOrdinal, bool IsIncluded, bool IsDescendingKey, string? FilterDefinition)>(new CommandDefinition(indexesQuery, cancellationToken: cancellationToken));
+		var rows = await connection.QueryAsync<(int ObjectId, string IndexName, string TypeDesc, bool IsUnique, bool IsUniqueConstraint, bool IsPrimaryKey, bool IsDisabled, bool IgnoreDupKey, byte FillFactor, bool IsPadded, bool AllowRowLocks, bool AllowPageLocks, string ColumnName, int KeyOrdinal, bool IsIncluded, bool IsDescendingKey, string? FilterDefinition, string? XmlSecondaryTypeDesc, string? XmlIndexTypeDescription)>(new CommandDefinition(indexesQuery, cancellationToken: cancellationToken));
 
 		return rows
 			.GroupBy(i => i.ObjectId)
 			.ToDictionary(
 				g => g.Key,
-				// FilterDefinition, the physical options, and the index-level flags are constant per index, so they join the grouping key.
-				g => g.GroupBy(i => (i.IndexName, i.TypeDesc, i.IsUnique, i.IsUniqueConstraint, i.IsPrimaryKey, i.IsDisabled, i.IgnoreDupKey, i.FillFactor, i.IsPadded, i.AllowRowLocks, i.AllowPageLocks, i.FilterDefinition))
+				// FilterDefinition, the physical options, the XML sub-type columns, and the index-level flags are constant per index, so they join the grouping key.
+				g => g.GroupBy(i => (i.IndexName, i.TypeDesc, i.IsUnique, i.IsUniqueConstraint, i.IsPrimaryKey, i.IsDisabled, i.IgnoreDupKey, i.FillFactor, i.IsPadded, i.AllowRowLocks, i.AllowPageLocks, i.FilterDefinition, i.XmlSecondaryTypeDesc, i.XmlIndexTypeDescription))
 					.Select(ig =>
 					{
 						// Key columns are ordered by key ordinal; columnstore key columns all have key_ordinal 0,
@@ -225,7 +230,7 @@ internal sealed class SchemaExtractor
 							.OrderBy(c => c.KeyOrdinal).ThenBy(c => c.ColumnName, StringComparer.Ordinal)
 							.Select(c => new IndexKeyColumn(c.ColumnName, c.IsDescendingKey)).ToList();
 						var includedColumns = ig.Where(c => c.IsIncluded).Select(c => c.ColumnName).OrderBy(c => c, StringComparer.Ordinal).ToList();
-						return new IndexSchema(ig.Key.IndexName, ig.Key.TypeDesc, ig.Key.IsUnique, ig.Key.IsUniqueConstraint, ig.Key.IsPrimaryKey, ig.Key.IsDisabled, ig.Key.IgnoreDupKey, keyColumns, includedColumns, ig.Key.FilterDefinition, ig.Key.FillFactor, ig.Key.IsPadded, ig.Key.AllowRowLocks, ig.Key.AllowPageLocks);
+						return new IndexSchema(ig.Key.IndexName, ig.Key.TypeDesc, ig.Key.IsUnique, ig.Key.IsUniqueConstraint, ig.Key.IsPrimaryKey, ig.Key.IsDisabled, ig.Key.IgnoreDupKey, keyColumns, includedColumns, ig.Key.FilterDefinition, ig.Key.FillFactor, ig.Key.IsPadded, ig.Key.AllowRowLocks, ig.Key.AllowPageLocks, ig.Key.XmlSecondaryTypeDesc, ig.Key.XmlIndexTypeDescription);
 					}).ToList());
 	}
 
@@ -498,7 +503,7 @@ internal sealed class SchemaExtractor
 				g => g.Select(p => new ParameterSchema(p.ParamName.TrimStart('@'), EffectiveDataType(p.TypeName, p.BaseTypeName, p.AliasMaxLength, p.AliasPrecision, p.AliasScale, p.AliasIsNullable), p.MaxLength, p.Precision, p.Scale, p.IsNullable, p.IsOutput, p.IsReadonly, p.XmlSchemaCollectionName, p.IsXmlDocument)).ToList());
 	}
 
-	private async Task<List<UserDefinedTableTypeSchema>> ExtractUserDefinedTableTypesAsync(SqlConnection connection, Func<string, string, bool> isIgnored, Dictionary<int, List<ColumnSchema>> columnsByObjectId, Dictionary<int, List<KeyConstraintSchema>> keyConstraintsByObjectId, Dictionary<int, List<CheckConstraintSchema>> checkConstraintsByObjectId, Dictionary<int, List<DefaultConstraintSchema>> defaultConstraintsByObjectId, CancellationToken cancellationToken)
+	private async Task<List<UserDefinedTableTypeSchema>> ExtractUserDefinedTableTypesAsync(SqlConnection connection, Func<string, string, bool> isIgnored, Dictionary<int, List<ColumnSchema>> columnsByObjectId, Dictionary<int, List<IndexSchema>> indexesByObjectId, Dictionary<int, List<KeyConstraintSchema>> keyConstraintsByObjectId, Dictionary<int, List<CheckConstraintSchema>> checkConstraintsByObjectId, Dictionary<int, List<DefaultConstraintSchema>> defaultConstraintsByObjectId, CancellationToken cancellationToken)
 	{
 		// Table types, keyed by their type_table_object_id so columns and constraints (extracted in the
 		// shared object_id-keyed pass) attach to the right type. Identity joins by that same object_id.
@@ -527,6 +532,7 @@ internal sealed class SchemaExtractor
 				info.SchemaName,
 				info.TableTypeName,
 				columnsByObjectId.GetValueOrDefault(info.ObjectId, new List<ColumnSchema>()),
+				indexesByObjectId.GetValueOrDefault(info.ObjectId, new List<IndexSchema>()),
 				keyConstraintsByObjectId.GetValueOrDefault(info.ObjectId, new List<KeyConstraintSchema>()),
 				checkConstraintsByObjectId.GetValueOrDefault(info.ObjectId, new List<CheckConstraintSchema>()),
 				defaultConstraintsByObjectId.GetValueOrDefault(info.ObjectId, new List<DefaultConstraintSchema>()),
@@ -723,7 +729,10 @@ internal sealed class SchemaExtractor
 	{
 		// One pass over sys.extended_properties covering the property classes whose targets are in scope:
 		// 0 database, 1 object-or-column, 2 parameter, 3 schema, 6 type (table types only — alias/CLR
-		// scalar types are out of scope), 7 index. The (class, major_id, minor_id) target is resolved to
+		// scalar types are out of scope), 7 index, 8 table-type column. Class 6 always carries minor_id 0
+		// (the type object itself); a property on one of the type's *columns* is class 8 keyed by
+		// user_type_id + column_id, which is why it needs its own join through sys.table_types to the
+		// backing table's sys.columns rows. The (class, major_id, minor_id) target is resolved to
 		// names here because catalog ids are not deterministic across databases. Class-1 targets are
 		// restricted to the extracted object kinds; that deliberately drops properties on constraint
 		// objects, whose system-generated names are not deterministic across databases. po resolves a
@@ -734,10 +743,10 @@ internal sealed class SchemaExtractor
 			SELECT ep.class_desc AS ClassDesc, ep.name AS Name,
 				CONVERT(NVARCHAR(128), SQL_VARIANT_PROPERTY(ep.value, 'BaseType')) AS ValueType,
 				CONVERT(NVARCHAR(MAX), ep.value) AS Value,
-				CASE ep.class WHEN 3 THEN s.name WHEN 6 THEN SCHEMA_NAME(ty.schema_id) ELSE SCHEMA_NAME(o.schema_id) END AS SchemaName,
-				CASE ep.class WHEN 6 THEN ty.name ELSE o.name END AS ObjectName,
+				CASE ep.class WHEN 3 THEN s.name WHEN 6 THEN SCHEMA_NAME(ty.schema_id) WHEN 8 THEN SCHEMA_NAME(tt.schema_id) ELSE SCHEMA_NAME(o.schema_id) END AS SchemaName,
+				CASE ep.class WHEN 6 THEN ty.name WHEN 8 THEN tt.name ELSE o.name END AS ObjectName,
 				o.type AS ObjectType,
-				CASE ep.class WHEN 1 THEN c.name WHEN 2 THEN pa.name WHEN 7 THEN ix.name END AS SubObjectName,
+				CASE ep.class WHEN 1 THEN c.name WHEN 2 THEN pa.name WHEN 7 THEN ix.name WHEN 8 THEN ttc.name END AS SubObjectName,
 				SCHEMA_NAME(po.schema_id) AS ParentSchemaName, po.name AS ParentName
 			FROM sys.extended_properties ep
 			LEFT JOIN sys.objects o ON ep.class IN (1, 2, 7) AND ep.major_id = o.object_id
@@ -747,7 +756,9 @@ internal sealed class SchemaExtractor
 			LEFT JOIN sys.indexes ix ON ep.class = 7 AND ix.object_id = ep.major_id AND ix.index_id = ep.minor_id
 			LEFT JOIN sys.schemas s ON ep.class = 3 AND ep.major_id = s.schema_id
 			LEFT JOIN sys.types ty ON ep.class = 6 AND ep.major_id = ty.user_type_id
-			WHERE ep.class IN (0, 1, 2, 3, 6, 7)
+			LEFT JOIN sys.table_types tt ON ep.class = 8 AND ep.major_id = tt.user_type_id
+			LEFT JOIN sys.columns ttc ON ep.class = 8 AND ttc.object_id = tt.type_table_object_id AND ttc.column_id = ep.minor_id
+			WHERE ep.class IN (0, 1, 2, 3, 6, 7, 8)
 				AND (ep.class <> 1 OR o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF', 'TR', 'SO', 'SN'))
 				AND (ep.class <> 2 OR o.type IN ('P', 'FN', 'IF', 'TF'))
 				AND (ep.class <> 7 OR o.type IN ('U', 'V'))

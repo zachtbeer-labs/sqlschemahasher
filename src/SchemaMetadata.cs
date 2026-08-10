@@ -82,8 +82,12 @@ public sealed record IndexKeyColumn(string Name, bool IsDescendingKey);
 /// physical storage and locking options (WITH (FILLFACTOR=…, PAD_INDEX=…, ALLOW_ROW_LOCKS=…,
 /// ALLOW_PAGE_LOCKS=…)); FillFactor 0 means the server default. Defaults mirror a plain index created
 /// without explicit options (fill factor 0, unpadded, both lock granularities allowed).
+/// XmlSecondaryTypeDesc and XmlIndexTypeDescription come from <c>sys.xml_indexes</c> and are null for
+/// every non-XML index. All four XML index flavours report the same <c>TypeDesc</c> of "XML", so
+/// without these a secondary XML index FOR PATH would be indistinguishable from the same index FOR
+/// VALUE, and a primary XML index from a secondary one — a collision even under the exact baseline.
 /// </summary>
-public sealed record IndexSchema(string Name, string TypeDesc, bool IsUnique, bool IsUniqueConstraint, bool IsPrimaryKey, bool IsDisabled, bool IgnoreDupKey, List<IndexKeyColumn> KeyColumns, List<string> IncludedColumns, string? FilterDefinition = null, byte FillFactor = 0, bool IsPadded = false, bool AllowRowLocks = true, bool AllowPageLocks = true);
+public sealed record IndexSchema(string Name, string TypeDesc, bool IsUnique, bool IsUniqueConstraint, bool IsPrimaryKey, bool IsDisabled, bool IgnoreDupKey, List<IndexKeyColumn> KeyColumns, List<string> IncludedColumns, string? FilterDefinition = null, byte FillFactor = 0, bool IsPadded = false, bool AllowRowLocks = true, bool AllowPageLocks = true, string? XmlSecondaryTypeDesc = null, string? XmlIndexTypeDescription = null);
 
 /// <summary>
 /// Represents a PRIMARY KEY or UNIQUE constraint (mirrors <c>sys.key_constraints</c>). Type is
@@ -142,12 +146,14 @@ public sealed record StoredProcedureSchema(string SchemaName, string Name, List<
 public sealed record ParameterSchema(string Name, string Type, int MaxLength, int Precision, int Scale, bool IsNullable, bool IsOutput = false, bool IsReadonly = false, string? XmlSchemaCollectionName = null, bool IsXmlDocument = false);
 
 /// <summary>
-/// Represents a user-defined table type: its columns plus the constraints and identity it may carry.
-/// SchemaName + Name together form the fully-qualified type identifier. A table type can declare
-/// PRIMARY KEY/UNIQUE, CHECK and DEFAULT constraints and an identity column (but not foreign keys),
-/// all of which affect the type's validation and marshalling semantics and so participate in the hash.
+/// Represents a user-defined table type: its columns plus the indexes, constraints and identity it may
+/// carry. SchemaName + Name together form the fully-qualified type identifier. A table type can declare
+/// PRIMARY KEY/UNIQUE, CHECK and DEFAULT constraints, inline indexes and an identity column (but not
+/// foreign keys), all of which affect the type's validation and marshalling semantics and so participate
+/// in the hash. Indexes come from the type's inline INDEX declarations (SQL Server 2014 and later);
+/// because a table type cannot be ALTERed, a change here means a drop and recreate.
 /// </summary>
-public sealed record UserDefinedTableTypeSchema(string SchemaName, string Name, List<ColumnSchema> Columns, List<KeyConstraintSchema> KeyConstraints, List<CheckConstraintSchema> CheckConstraints, List<DefaultConstraintSchema> DefaultConstraints, string? IdentityColumn = null, string? IdentitySeed = null, string? IdentityIncrement = null, bool IdentityNotForReplication = false, bool IsMemoryOptimized = false)
+public sealed record UserDefinedTableTypeSchema(string SchemaName, string Name, List<ColumnSchema> Columns, List<IndexSchema> Indexes, List<KeyConstraintSchema> KeyConstraints, List<CheckConstraintSchema> CheckConstraints, List<DefaultConstraintSchema> DefaultConstraints, string? IdentityColumn = null, string? IdentitySeed = null, string? IdentityIncrement = null, bool IdentityNotForReplication = false, bool IsMemoryOptimized = false)
 {
 	/// <summary>
 	/// Returns the fully-qualified name in [schema].[name] format.

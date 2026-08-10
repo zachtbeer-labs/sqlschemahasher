@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -239,6 +240,18 @@ internal sealed class SchemaHashCalculator
             foreach (var included in index.IncludedColumns)
                 AppendString(hasher, included);
             AppendString(hasher, index.FilterDefinition ?? string.Empty);
+            // XML index sub-type. Every XML index flavour shares TypeDesc "XML", so without these a
+            // secondary index FOR PATH, FOR VALUE and FOR PROPERTY — and a primary vs a selective XML
+            // index — would all collide. Both fields are null for every non-XML index; the whole block
+            // is skipped in that case (rather than hashing two empty strings, whose length prefixes
+            // would still add bytes) so that a database with no XML indexes hashes byte-identically to
+            // one produced before this field existed. The marker keeps the encoding unambiguous.
+            if (index.XmlSecondaryTypeDesc is not null || index.XmlIndexTypeDescription is not null)
+            {
+                AppendString(hasher, "XMLIDX:");
+                AppendString(hasher, index.XmlSecondaryTypeDesc ?? string.Empty);
+                AppendString(hasher, index.XmlIndexTypeDescription ?? string.Empty);
+            }
             // Physical storage / locking options. These are behavioral (ALLOW_PAGE_LOCKS=OFF changes
             // locking) and physical (FILLFACTOR/PAD_INDEX affect page density), captured under the exact baseline.
             AppendInt(hasher, index.FillFactor);
@@ -417,6 +430,11 @@ internal sealed class SchemaHashCalculator
         {
             HashColumn(hasher, column);
         }
+
+        // Inline INDEX declarations on the type. Hashed through the shared HashIndexes, so every
+        // IndexNormalization bit applies to a table type's indexes exactly as it does to a table's.
+        // Emits nothing for a type with no inline indexes, so types that declare none are unaffected.
+        HashIndexes(hasher, udt.Indexes);
 
         // Table types cannot declare foreign keys, so only key/check/default constraints participate.
         HashKeyConstraints(hasher, udt.KeyConstraints);
@@ -601,14 +619,18 @@ internal sealed class SchemaHashCalculator
 
     private bool EffectiveConstraintNotForReplication(bool isNotForReplication) => _options.Constraints.HasFlag(ConstraintNormalization.IgnoreNotForReplication) ? false : isNotForReplication;
 
-    // NormalizeClustering collapses only the rowstore CLUSTERED/NONCLUSTERED placement to a common
-    // token; the COLUMNSTORE distinction (clustered vs nonclustered columnstore are fundamentally
-    // different storage strategies) is preserved.
+    // NormalizeClustering collapses only the rowstore B-tree CLUSTERED/NONCLUSTERED placement to a
+    // common token. Every other sys.indexes.type_desc value names a fundamentally different storage
+    // structure and is preserved verbatim: both COLUMNSTORE variants, XML, SPATIAL, NONCLUSTERED HASH
+    // (memory-optimized), and JSON. Matching on exact equality rather than a substring test is what
+    // keeps 'NONCLUSTERED HASH' distinct from 'NONCLUSTERED' — a prefix/substring test would collapse
+    // a hash index onto a B-tree, silently colliding two unrelated index kinds.
     private string EffectiveTypeDesc(string typeDesc)
     {
         if (!_options.Indexes.HasFlag(IndexNormalization.NormalizeClustering))
             return typeDesc;
-        return typeDesc.Contains("COLUMNSTORE", StringComparison.OrdinalIgnoreCase) ? typeDesc : "X-CLUSTERED";
+        var isRowstoreBTree = typeDesc.Equals("CLUSTERED", StringComparison.OrdinalIgnoreCase) || typeDesc.Equals("NONCLUSTERED", StringComparison.OrdinalIgnoreCase);
+        return isRowstoreBTree ? "X-CLUSTERED" : typeDesc;
     }
 
     // Under IgnoreSortOrder the ASC/DESC direction of each key column is dropped; key column
@@ -637,8 +659,16 @@ internal sealed class SchemaHashCalculator
     private const string SortItemSep = "";
     private const string SortDescMarker = "";
 
+    // The sort key must cover every field HashIndexes hashes (same discipline as HashForeignKeys and
+    // HashCheckConstraints). Under Indexes.IgnoreNames — which the Structural preset sets — Name
+    // collapses to the empty sentinel for every index on an object, so two indexes sharing key columns,
+    // type, includes and filter tie on the remaining fields. OrderBy is a stable sort, so a tie falls
+    // back to extraction order (sys.indexes ORDER BY i.name), which would leak the very names the
+    // option just removed back into the hash and make two option-equivalent databases differ.
     private static string IndexSortKey(IndexSchema index) =>
-        string.Join(SortFieldSep, KeyColumnsSortKey(index.KeyColumns), index.TypeDesc, index.Name, string.Join(SortItemSep, index.IncludedColumns), index.FilterDefinition ?? string.Empty);
+        string.Join(SortFieldSep, KeyColumnsSortKey(index.KeyColumns), index.TypeDesc, index.Name, string.Join(SortItemSep, index.IncludedColumns), index.FilterDefinition ?? string.Empty, index.XmlSecondaryTypeDesc ?? string.Empty, index.XmlIndexTypeDescription ?? string.Empty, BoolSortKey(index.IsUnique), BoolSortKey(index.IsUniqueConstraint), BoolSortKey(index.IsPrimaryKey), BoolSortKey(index.IsDisabled), BoolSortKey(index.IgnoreDupKey), index.FillFactor.ToString("D3", CultureInfo.InvariantCulture), BoolSortKey(index.IsPadded), BoolSortKey(index.AllowRowLocks), BoolSortKey(index.AllowPageLocks));
+
+    private static string BoolSortKey(bool value) => value ? "1" : "0";
 
     private static string KeyColumnsSortKey(List<IndexKeyColumn> keyColumns) =>
         string.Join(SortItemSep, keyColumns.Select(k => k.IsDescendingKey ? k.Name + SortDescMarker : k.Name));
