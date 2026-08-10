@@ -133,6 +133,165 @@ CEK id) is a separate, harder problem — it would require hashing
 `sys.column_encryption_key_values.encrypted_value`, a database-scoped key-metadata object outside this
 library's stated in-scope object list — and is not part of this gap.
 
+### Trigger schema-binding (`WITH SCHEMABINDING`) not captured
+
+`sys.sql_modules.is_schema_bound` is not extracted or hashed for triggers; `TriggerSchema` has no
+corresponding field. `WITH SCHEMABINDING` is legal (if rare) syntax on `CREATE`/`ALTER TRIGGER` and is
+genuinely schema-relevant — it locks the referenced table/columns against ALTERs that would break the
+trigger, a real behavioral difference from an otherwise-identical unbound trigger. Two triggers
+identical in name, parent, event set, flags, and body hash currently compare as identical whether or
+not one carries `WITH SCHEMABINDING`.
+
+### Trigger `EXECUTE AS` context not captured
+
+`sys.sql_modules.execute_as_principal_id` — populated only when a trigger specifies
+`EXECUTE AS <principal>` — is not extracted or hashed; `TriggerSchema` has no corresponding field. This
+is the trigger analog of the id-to-name resolution technique already used elsewhere in the extractor
+(e.g. `SCHEMA_NAME`/`OBJECT_NAME` lookups), just not applied here. Adding, removing, or changing a
+trigger's `EXECUTE AS` clause — a real change to the security context the trigger body executes under —
+currently does not change the hash.
+
+### Stored procedure `WITH RECOMPILE` not captured
+
+`sys.sql_modules.is_recompiled` — set when a procedure is created or altered `WITH RECOMPILE` — is not
+extracted or hashed; `StoredProcedureSchema` has no corresponding field. This is a genuine compile-time
+behavioral option selected at CREATE/ALTER time, not runtime state. Two procedures identical in name,
+parameters, and body hash currently compare as identical whether or not one carries `WITH RECOMPILE`.
+
+### Stored procedure `EXECUTE AS` context not captured
+
+`sys.sql_modules.execute_as_principal_id` — populated only when a procedure specifies
+`EXECUTE AS <principal>` — is not extracted or hashed; `StoredProcedureSchema` has no corresponding
+field. This is the stored-procedure analog of the "Trigger `EXECUTE AS` context not captured" entry
+above: the same column, resolvable with the same id-to-name technique already used elsewhere in the
+extractor, just not applied to `sys.procedures`. Adding, removing, or changing a procedure's
+`EXECUTE AS` clause — a real change to the security context the body executes under — currently does not
+change the hash.
+
+### Stored procedure native compilation not captured (`uses_native_compilation`, `is_schema_bound`)
+
+`sys.sql_modules.uses_native_compilation` is not extracted or hashed for stored procedures. Native
+compilation (In-Memory OLTP, `CREATE PROCEDURE ... WITH NATIVE_COMPILATION, SCHEMABINDING`) is a
+genuine, DDL-selected execution model, not runtime state. `is_schema_bound` on the same view is the
+derived flag Microsoft Learn documents as forced to `1` only for a natively compiled procedure (plain
+`CREATE PROCEDURE` has no `SCHEMABINDING` option, so it is otherwise always `0`), so it carries no
+information beyond `uses_native_compilation` and does not need separate capture. Two procedures
+identical in name, parameters, and body hash currently compare as identical whether one is natively
+compiled and the other interpreted.
+
+### Stored procedure replication/startup flags not captured
+
+`sys.procedures` adds four columns beyond the shared `sys.objects` row — `is_auto_executed` (the
+`sp_procoption 'startup'` flag), `is_execution_replicated`, `is_repl_serializable_only`, and
+`skips_repl_constraints` — none of which are extracted or hashed; `StoredProcedureSchema` has no
+corresponding fields. These reflect DDL-configured behavior (whether a procedure auto-runs at server
+startup, and how it participates in replication), not runtime state. Two procedures identical in every
+other captured field currently compare as identical regardless of these flags.
+
+### Stored procedure parameter Always Encrypted metadata not captured
+
+`sys.parameters.encryption_type`/`encryption_type_desc`/`encryption_algorithm_name`/
+`column_encryption_key_id` (Always Encrypted parameterization, SQL Server 2016+) are not extracted or
+hashed for stored-procedure (or function) parameters — `ParameterSchema` has no corresponding field,
+unlike `ColumnSchema.EncryptionTypeDesc` which is already captured for table columns. Marking,
+un-marking, or rekeying a parameter for Always Encrypted parameterization currently does not change the
+hash. Distinct from the existing "Always Encrypted column key identity not captured" entry above, which
+is about table columns' `column_encryption_key_id`, not parameters.
+
+### Numbered stored procedures not captured
+
+Numbered procedures (`CREATE PROCEDURE proc;2`, `proc;3`, ...) are a deprecated, legacy shape whose own
+body/parameter rows for procedure numbers ≥2 live only in `sys.numbered_procedures`/
+`sys.numbered_procedure_parameters` — the base procedure (`;1`) is a normal row in
+`sys.procedures`/`sys.parameters`, but neither numbered-procedure view is queried anywhere in
+`SchemaExtractor`. Not present in Azure SQL Database at all (deprecated everywhere else it exists), but
+a real historical shape on-prem: a numbered procedure beyond `;1` is entirely invisible to extraction, so
+adding, altering, or dropping one does not change the hash.
+
+### Function schema-binding (`WITH SCHEMABINDING`) not captured
+
+`sys.sql_modules.is_schema_bound` is not extracted or hashed for functions; `FunctionSchema` has no
+corresponding field. `WITH SCHEMABINDING` is common on scalar and inline-table-valued functions used
+inside indexed views, computed columns, or other schema-bound modules, and is genuinely schema-relevant —
+it locks the referenced tables/columns against ALTERs that would break the function, a real behavioral
+difference from an otherwise-identical unbound function. Two functions identical in name, type,
+parameters, flags, and body hash currently compare as identical whether or not one carries
+`WITH SCHEMABINDING`. This is the function analog of the existing "Trigger schema-binding
+(`WITH SCHEMABINDING`) not captured" entry above; unlike the stored-procedure case, `SCHEMABINDING` on a
+function is not tied to native compilation, so it needs its own field rather than being subsumed by
+`uses_native_compilation`.
+
+### Function `EXECUTE AS` context not captured
+
+`sys.sql_modules.execute_as_principal_id` — populated only when a function specifies
+`WITH EXECUTE AS <principal>` — is not extracted or hashed; `FunctionSchema` has no corresponding field.
+`NULL` covers both the unset default and an explicit `EXECUTE AS CALLER`, so the column alone cannot
+distinguish those two, but it does distinguish `SELF`/`OWNER`/a named principal from the default, none of
+which is captured today. This is the function analog of the existing "Trigger `EXECUTE AS` context not
+captured" and "Stored procedure `EXECUTE AS` context not captured" entries above. Adding, removing, or
+changing a function's `EXECUTE AS` clause to/from `SELF`, `OWNER`, or a named principal — a real change to
+the security context the function body executes under — currently does not change the hash.
+
+### Function `RETURNS NULL ON NULL INPUT` not captured
+
+`sys.sql_modules.null_on_null_input` is not extracted or hashed for functions; `FunctionSchema` has no
+corresponding field. This flag reflects whether a function was declared `RETURNS NULL ON NULL INPUT`, a
+genuine calling-convention/optimization contract (the engine short-circuits to `NULL` without invoking the
+function body when any argument is `NULL`) selected at CREATE/ALTER time, not runtime state. Two functions
+identical in name, type, parameters, and body hash currently compare as identical whether or not one
+carries `RETURNS NULL ON NULL INPUT`.
+
+### Function database-collation dependency not captured
+
+`sys.sql_modules.uses_database_collation` is not extracted or hashed for functions; `FunctionSchema` has
+no corresponding field. The flag is `1` when a schema-bound function's correctness depends on the
+database's default collation (it compares columns or literals without an explicit `COLLATE`) — this
+blocks `ALTER DATABASE ... COLLATE` while the module exists, so it is a genuine, catalog-observable
+cross-database comparability signal. Two functions identical in every other captured field currently
+compare as identical regardless of this flag.
+
+### Function native compilation flag not captured
+
+`sys.sql_modules.uses_native_compilation` (SQL Server 2014+) is not extracted or hashed for functions;
+`FunctionSchema` has no corresponding field. A natively-compiled (In-Memory OLTP) scalar function, created
+`WITH NATIVE_COMPILATION, SCHEMABINDING`, is a fundamentally different execution-engine object from an
+interpreted T-SQL function with the same signature and body — the same distinction `IsMemoryOptimized`
+already captures for tables and table types, and the same gap already tracked for stored procedures in the
+"Stored procedure native compilation not captured" entry above. Two otherwise-identical functions
+currently compare as identical regardless of this flag.
+
+### View `WITH CHECK OPTION` not captured
+
+`sys.views.with_check_option` is not extracted or hashed; `ViewSchema` has no corresponding field.
+`WITH CHECK OPTION` is a real DDL clause on `CREATE VIEW`/`ALTER VIEW` that changes the view's
+INSERT/UPDATE enforcement behavior (rows that no longer satisfy the view's `WHERE` predicate are
+rejected). Under the default `Strict` options, adding or removing `WITH CHECK OPTION` changes the raw
+definition text and so happens to be reflected in `DefinitionHash` — but under
+`ModuleNormalization.IgnoreBodyText`, or for any comparison that only inspects the typed fields, this
+flag is invisible: two views identical apart from `WITH CHECK OPTION` compare as identical whenever
+body text is excluded from the comparison.
+
+### View `VIEW_METADATA` (has_opaque_metadata) not captured
+
+`sys.views.has_opaque_metadata` — set when the view is created `WITH VIEW_METADATA` — is not extracted
+or hashed; `ViewSchema` has no corresponding field. `VIEW_METADATA` changes what browse-mode metadata
+(`sp_describe_first_result_set`, OLE DB/ODBC browse mode) reports for the view's base tables/columns, a
+genuine behavioral difference for client tooling. As with `WITH CHECK OPTION` above, this is present in
+the raw definition text and so happens to be reflected in `DefinitionHash` under default options, but
+disappears entirely from the comparison surface under `ModuleNormalization.IgnoreBodyText`.
+
+### View schema-binding (`WITH SCHEMABINDING`) not captured
+
+`sys.sql_modules.is_schema_bound` is not extracted or hashed for views; `ViewSchema` has no
+corresponding field — the view analog of the "Trigger schema-binding (`WITH SCHEMABINDING`) not
+captured" gap above. `WITH SCHEMABINDING` is a load-bearing clause: it is the prerequisite for creating
+an index on the view, and it locks the referenced tables/columns against `ALTER`s that would break the
+view. Like the check-option and view-metadata gaps above, this is present in the raw definition text (so
+it is incidentally reflected in `DefinitionHash` under default options) but is invisible under
+`ModuleNormalization.IgnoreBodyText`, and there is no discrete field a caller can inspect independent of
+body-text diffing — unlike, e.g., `FunctionSchema.TypeDesc`, which is captured unconditionally precisely
+so scalar/TVF identity survives `IgnoreBodyText`.
+
 ## Resolved in v2
 
 - **Anonymous temporal history table/index names leaked `object_id`** — a system-versioned table
