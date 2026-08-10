@@ -24,16 +24,16 @@ public class RegressionAnchorTests : MatrixTestBase
 {
     // Pinned hashes for RichReferenceSchema(). Captured from a green run against the
     // mcr.microsoft.com/mssql/server:2025-latest container. See class remarks.
-    private const string ExpectedStrictHash = "2:UY12cOMax9QREgF6R/iLEk/cndC1nOTpT0wBvrO8wGQ=";
-    private const string ExpectedV1Hash = "2:AsC4i8777wwRg03uFEgHeDhyK92jI+wRQMFmbvFRRes=";
-    private const string ExpectedV2Hash = "2:UY12cOMax9QREgF6R/iLEk/cndC1nOTpT0wBvrO8wGQ=";
-    private const string ExpectedStructuralHash = "2:YQKwDPJhHJeb5E8PPh0xpR8aG3a1sXyQREXgzQPF9BU=";
+    private const string ExpectedStrictHash = "2:vY/vRWoTqrGWuaCaii4KrQXQ6VC4cTOdf5Dh7n4KNLg=";
+    private const string ExpectedV1Hash = "2:B4m0A/jBYmTJjp2Bntya/uHE0OAIN9W7Xo875N1TmMk=";
+    private const string ExpectedV2Hash = "2:vY/vRWoTqrGWuaCaii4KrQXQ6VC4cTOdf5Dh7n4KNLg=";
+    private const string ExpectedStructuralHash = "2:22xjNHhajNzWIcrksmRplmKVppGbGWi5PkOiZ+FVn4I=";
 
     /// <summary>
     /// A deliberately rich, fully explicitly-named schema exercising most catalog surfaces the hasher
-    /// captures: a table with a collation-pinned unique column, a masked column, a computed+persisted
-    /// column, a rowguid column with a default, a sparse column, a CHECK, an XML DOCUMENT column;
-    /// a table with an identity(seed) PK, an untrusted NOT-FOR-REPLICATION cascading FK, a filtered
+    /// captures: a table with a collation-pinned unique column, a computed+persisted column, a rowguid
+    /// column with a default, a sparse column, a CHECK, an XML DOCUMENT column; a table with an
+    /// identity(seed) PK, a masked column, an untrusted NOT-FOR-REPLICATION cascading FK, a filtered
     /// index, a nonclustered columnstore index and a disabled DESC index; a stored procedure created
     /// under a non-default SET option; a table type with an identity column; an ordinary view; a
     /// schemabound indexed view; a scalar function over an alias-typed parameter; an inline TVF; a
@@ -47,10 +47,13 @@ public class RegressionAnchorTests : MatrixTestBase
         @"CREATE XML SCHEMA COLLECTION dbo.PersonSchema AS
             '<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema""><xsd:element name=""p"" type=""xsd:string""/></xsd:schema>'",
 
+        // No MASKED column here: SQL Server 2019 refuses to create an index on a view that
+        // references a table with any masked column, even one the view doesn't select — and
+        // dbo.PersonSummary below is a schemabound indexed view over dbo.Person. The masked
+        // column instead lives on dbo.Membership, which no indexed view references.
         @"CREATE TABLE dbo.Person (
             PersonId INT NOT NULL CONSTRAINT PK_Person PRIMARY KEY,
             Email NVARCHAR(256) COLLATE Latin1_General_CS_AS NOT NULL CONSTRAINT UQ_Person_Email UNIQUE,
-            Ssn CHAR(11) MASKED WITH (FUNCTION = 'partial(0,""XXX-XX-"",4)') NULL,
             Age INT NOT NULL CONSTRAINT CK_Person_Age CHECK (Age >= 0),
             AgeDoubled AS (Age * 2) PERSISTED,
             RowGuid UNIQUEIDENTIFIER ROWGUIDCOL NOT NULL CONSTRAINT DF_Person_RowGuid DEFAULT NEWID(),
@@ -63,7 +66,8 @@ public class RegressionAnchorTests : MatrixTestBase
             MembershipId INT IDENTITY(1000,5) NOT NULL CONSTRAINT PK_Membership PRIMARY KEY,
             PersonId INT NOT NULL,
             Level INT NOT NULL,
-            CreatedUtc DATETIME2 NOT NULL
+            CreatedUtc DATETIME2 NOT NULL,
+            Ssn CHAR(11) MASKED WITH (FUNCTION = 'partial(0,""XXX-XX-"",4)') NULL
         )",
 
         // Untrusted (WITH NOCHECK), NOT FOR REPLICATION, cascading FK.

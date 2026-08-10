@@ -85,10 +85,10 @@ public class PrecedenceAndCompositionTests : MatrixTestBase
     // ── 2.5  Each per-domain Structural folds exactly its member bits — no more ───────────────────
 
     [TestMethod]
-    public async Task IndexesStructural_FoldsNameClusteringSortOrder_NotPhysicalBits()
+    public async Task IndexesStructural_FoldsNameClusteringSortOrderAndPhysicalBits()
     {
-        // Indexes.Structural = IgnoreNames | NormalizeClustering | IgnoreSortOrder. Fill factor,
-        // pad index, lock options and disabled are deliberately NOT folded in.
+        // Indexes.Structural = IgnoreNames | NormalizeClustering | IgnoreSortOrder | IgnoreFillFactor |
+        // IgnorePadIndex | IgnoreLockOptions | IgnoreDisabled.
         var structural = new SchemaHashOptions { Indexes = IndexNormalization.Structural };
         var table = "CREATE TABLE dbo.T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY, C INT NOT NULL)";
 
@@ -98,7 +98,7 @@ public class PrecedenceAndCompositionTests : MatrixTestBase
 
         var ffA = await BuildSchemaAsync("ixsFfA", table, "CREATE INDEX IX_T_C ON dbo.T(C) WITH (FILLFACTOR = 80)");
         var ffB = await BuildSchemaAsync("ixsFfB", table, "CREATE INDEX IX_T_C ON dbo.T(C) WITH (FILLFACTOR = 90)");
-        Hash(ffA, structural).ShouldNotBe(Hash(ffB, structural), "Indexes.Structural must NOT fold FILLFACTOR");
+        Hash(ffA, structural).ShouldBe(Hash(ffB, structural), "Indexes.Structural folds FILLFACTOR");
     }
 
     [TestMethod]
@@ -117,9 +117,9 @@ public class PrecedenceAndCompositionTests : MatrixTestBase
     }
 
     [TestMethod]
-    public async Task ConstraintsStructural_FoldsNames_NotEnforcement()
+    public async Task ConstraintsStructural_FoldsNamesAndEnforcement()
     {
-        // Constraints.Structural = IgnoreNames only.
+        // Constraints.Structural = IgnoreNames | IgnoreDisabled | IgnoreTrust | IgnoreNotForReplication.
         var structural = new SchemaHashOptions { Constraints = ConstraintNormalization.Structural };
 
         var nameA = await BuildSchemaAsync("csNameA", "CREATE TABLE dbo.T (Id INT NOT NULL, Age INT NOT NULL CONSTRAINT CK_Alpha CHECK (Age > 0))");
@@ -132,7 +132,7 @@ public class PrecedenceAndCompositionTests : MatrixTestBase
         var trustB = await BuildSchemaAsync("csTrustB",
             "CREATE TABLE dbo.T (Id INT NOT NULL, Age INT NOT NULL)",
             "ALTER TABLE dbo.T WITH NOCHECK ADD CONSTRAINT CK_T_Age CHECK (Age > 0)");
-        Hash(trustA, structural).ShouldNotBe(Hash(trustB, structural), "Constraints.Structural must NOT fold the untrusted (is_not_trusted) enforcement state");
+        Hash(trustA, structural).ShouldBe(Hash(trustB, structural), "Constraints.Structural folds the untrusted (is_not_trusted) enforcement state");
     }
 
     // ── 2.6  V1 and V2 differ only by index key sort order ───────────────────────────────────────
