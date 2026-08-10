@@ -39,6 +39,10 @@ Tests are split into two projects:
 
 `dotnet test SqlSchemaHasher.slnx` runs both.
 
+### Dependencies
+
+This repo uses [Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management). NuGet versions live in `Directory.Packages.props` at the repo root: project files reference packages without a `Version` attribute. To add or bump a dependency, add or edit its `<PackageVersion>` entry there, then regenerate the lock files with `dotnet restore SqlSchemaHasher.slnx --force-evaluate` and commit them alongside the change (CI restores with `--locked-mode`).
+
 ### Benchmarks
 
 Performance benchmarks live in `benchmarks/` and are run by hand — there is no CI performance gate,
