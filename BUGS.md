@@ -322,6 +322,117 @@ type/length/precision/scale/nullability while the type is unused does not change
 `SchemaMetadata` list, extracted directly from `sys.types` rather than piggybacked on the objects that
 reference them.
 
+### Schema (namespace) objects not captured as their own catalog entity
+
+`sys.schemas` is never queried by `SchemaExtractor`, and `SchemaMetadata` has no corresponding list,
+unlike every other in-scope object kind (tables, stored procedures, table types, views, functions,
+triggers, sequences, synonyms), each of which has its own driving catalog query and its own list. A
+schema's name surfaces only indirectly, as the `SchemaName` qualifier resolved via `SCHEMA_NAME(...)` on
+the objects extracted under it. An empty schema, or one whose entire contents are excluded via
+`ObjectNamesToIgnore`/`SchemaFilter`, therefore has no representation anywhere in the extracted metadata:
+creating, dropping, or renaming such a schema does not change the hash, since nothing else in the output
+references its name.
+
+**Workaround:** none currently: this would require a new `SchemaSchema`-style record extracted directly
+from `sys.schemas`, the same dedicated-query-and-own-list shape every other in-scope object kind already
+has.
+
+### Schema ownership (`ALTER AUTHORIZATION ON SCHEMA`) not captured
+
+`sys.schemas.principal_id` (resolvable to a principal name via `sys.database_principals`) is not
+extracted or hashed for any schema, populated or empty. Ownership is a mutable attribute independent of
+schema identity: `ALTER AUTHORIZATION ON SCHEMA::<name> TO <principal>` changes `principal_id` while
+leaving `schema_id` and `name` untouched, and it is a real, DDL-driven security change (it reassigns who
+owns every object subsequently created in that schema without an explicit owner). Since no `sys.schemas`
+extraction exists at all (see the "Schema (namespace) objects not captured as their own catalog entity"
+entry above), this axis is invisible regardless of whether the schema holds any objects: reassigning a
+schema's owner currently does not change the hash.
+
+### XML schema collection content not captured
+
+`sys.xml_schema_collections` collections are not extracted as a standalone object list —
+`SchemaMetadata` has no `XmlSchemaCollectionSchema`. A column or parameter typed `XML(<collection>)`
+captures only the collection's schema-qualified name (`ColumnSchema.XmlSchemaCollectionName`/
+`ParameterSchema.XmlSchemaCollectionName`) and the `DOCUMENT`/`CONTENT` facet (`IsXmlDocument`) — never
+the collection's actual namespace set or XSD shape, which lives in `sys.xml_schema_namespaces` and is
+only reconstructable via `XML_SCHEMA_NAMESPACE()`. Two consequences: (1) a collection referenced by a
+column/parameter can have its content silently replaced — `ALTER XML SCHEMA COLLECTION ... ADD` a new
+namespace, or `DROP`+`CREATE` the same name with an entirely different XSD — without changing the hash,
+since the name (and `is_xml_document`) stay the same; (2) a collection that exists but is not bound to
+any column or parameter is invisible to extraction entirely, so `CREATE`/`DROP XML SCHEMA COLLECTION` on
+an unused collection does not change the hash. This is the XML-schema-collection analog of the
+"Unreferenced alias scalar types not captured as standalone objects" gap above, but strictly worse: even
+a *referenced* alias type's underlying shape is captured today, while a referenced XML schema
+collection's content is not.
+
+**Workaround:** none currently — this would require a new `XmlSchemaCollectionSchema` extracted directly
+from `sys.xml_schema_collections` (excluding the built-in `sys.sys` collection) joined to
+`sys.xml_schema_namespaces` (ordered by namespace `name`, not the not-reliably-meaningful
+`xml_namespace_id`), hashing each namespace's `XML_SCHEMA_NAMESPACE(schema, collection, namespace)`
+reconstructed form — never the original DDL text, which SQL Server does not preserve.
+
+### Full-text catalogs not captured
+
+`sys.fulltext_catalogs` is not queried anywhere in `SchemaExtractor`, and `SchemaMetadata` has no
+corresponding record type. A full-text catalog's schema-relevant state, its `name`, whether it is the
+`is_default` catalog used when `CREATE FULLTEXT INDEX` omits an explicit catalog, and
+`is_accent_sensitivity_on` (set via `WITH ACCENT_SENSITIVITY = ON|OFF`), is entirely unobserved.
+`CREATE FULLTEXT CATALOG` succeeds as pure metadata even on an instance where the Full-Text Search engine
+component is not installed, so a database can legitimately carry full-text catalogs independent of
+whether indexing on them will work; that makes catalog identity a genuine, always-observable schema fact
+rather than something contingent on the feature being usable. This omission is not recorded in
+CLAUDE.md's in-scope/out-of-scope object list, this file's "Out-of-scope object kinds" entry, or
+`website/docs/what-gets-hashed.md`'s "Not yet captured" section, so a caller has no way to learn that
+full-text catalogs are silently excluded. Adding, dropping, or renaming a full-text catalog, changing
+which catalog is default, or toggling its accent sensitivity currently does not change the hash. (The
+deprecated filegroup-era columns `data_space_id`/`file_id`/`path` and the transient `is_importing` flag
+are correctly out of scope and are not part of this gap.)
+
+**Workaround:** none currently, this would require a new `FullTextCatalogSchema`-style record extracted
+directly from `sys.fulltext_catalogs`, the same dedicated-query-and-own-list shape every other in-scope
+object kind already has.
+
+### Full-text indexes not captured
+
+`sys.fulltext_indexes` is not queried anywhere in `SchemaExtractor`; there is no corresponding record in
+`SchemaMetadata`. A table's or indexed view's full-text index (at most one per object) carries several
+schema-relevant properties that are entirely unobserved: which catalog it belongs to
+(`fulltext_catalog_id`, resolvable to the catalog's name), its `KEY INDEX` (`unique_index_id`, resolvable
+to that index's identity the same way other index/object ids are resolved elsewhere in this library),
+`is_enabled` (an explicit, deliberately toggled `ENABLE`/`DISABLE` state, not crawl progress),
+`change_tracking_state`/`change_tracking_state_desc` (`MANUAL`/`AUTO`/`OFF`), its associated stoplist
+(`stoplist_id`, resolvable to identity) and search property list (`property_list_id`, resolvable to
+identity, SQL Server 2012+), and, new on SQL Server 2025 (17.x), `index_version` (legacy vs. new
+word-breaker/filter binaries, a genuine behavioral distinction on 2025+ that would need the same
+version-gating pattern this library already uses elsewhere, e.g. the `HASHBYTES`/`CHECKSUM` capability
+probe run once in `ExtractSchemaAsync`). The crawl/population runtime columns (`has_crawl_completed`,
+`crawl_type`, `crawl_start_date`, `crawl_end_date`, `incremental_timestamp`) are correctly out of scope as
+transient state and are not part of this gap; likewise, whether an index was created with `NO POPULATION`
+is not itself recoverable from the catalog after creation, so that specific detail could never be
+captured regardless of this gap. Adding, dropping, or reconfiguring a full-text index (its catalog, key
+index, change tracking mode, enabled state, stoplist, property list, or, on 2025+, its word-breaker
+version) currently does not change the hash.
+
+**Workaround:** none currently, this would require a new `FullTextIndexSchema`-style record and the
+associated id-to-name resolution for `unique_index_id`/`stoplist_id`/`property_list_id`.
+
+### Full-text index columns not captured
+
+`sys.fulltext_index_columns` is not queried anywhere in `SchemaExtractor`. Per-column full-text
+participation state is entirely unobserved: which columns participate (`column_id`, resolvable via
+`sys.columns` the same way other column references are resolved elsewhere in this library), the
+per-column word-breaker `language_id` (a single full-text index can mix languages across its columns,
+e.g. `LANGUAGE 1033` on one column and the neutral `LANGUAGE 0` on another), the `TYPE COLUMN`
+document-filtering pairing (`type_column_id`, resolvable to the extension column's name, populated only
+for a `varbinary(max)`/`image` column indexed with an explicit type column), and `statistical_semantics`
+(SQL Server 2012+ Semantic Search participation). None of these have any corresponding field anywhere in
+`SchemaMetadata`. Adding or removing a column from a full-text index, changing its language, changing its
+`TYPE COLUMN` pairing, or toggling `STATISTICAL_SEMANTICS` currently does not change the hash.
+
+**Workaround:** none currently, this is the column-level counterpart of the "Full-text indexes not
+captured" entry above and would be extracted alongside it as a `List<FullTextIndexColumnSchema>` (or
+similar) on the same new record.
+
 ## Resolved in v2
 
 - **Anonymous temporal history table/index names leaked `object_id`** — a system-versioned table
