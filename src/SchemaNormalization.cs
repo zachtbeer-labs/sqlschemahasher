@@ -165,16 +165,17 @@ public enum ConstraintNormalization
 }
 
 /// <summary>
-/// Normalization of programmable modules (stored procedures): body text and the CREATE-time SET
-/// options. The procedure name and parameter signatures always participate.
+/// Normalization of programmable modules — stored procedures, views, functions and triggers: body
+/// text and the CREATE-time SET options. The module name, parameter signatures and structural flags
+/// always participate.
 /// </summary>
 [Flags]
 public enum ModuleNormalization
 {
-	/// <summary>Full fidelity — the procedure body hash and SET options participate.</summary>
+	/// <summary>Full fidelity — the module body hash and SET options participate.</summary>
 	Strict = 0,
 
-	/// <summary>Drop the procedure body definition hash — only the name and parameter signatures matter.</summary>
+	/// <summary>Drop the module body definition hash — only the name, parameter signatures and structural flags matter.</summary>
 	IgnoreBodyText = 1 << 0,
 
 	/// <summary>Neutralize the CREATE-time ANSI_NULLS / QUOTED_IDENTIFIER SET options.</summary>

@@ -8,9 +8,13 @@ namespace SqlSchemaHash.IntegrationTests.Settings;
 ///
 /// Golden hashes pin the exact hash of one deliberately rich reference schema under the bare
 /// Strict baseline and each preset. Any unintended change to field order, extraction fidelity, or
-/// preset composition trips these. The pinned values are SQL-Server-version sensitive by design:
-/// if the container image changes and a hash shifts, that is a signal to review, not to blindly
-/// re-baseline.
+/// preset composition trips these. A single pin per preset covers every server version the suite
+/// runs on: extraction of this fixture is byte-identical on 2019, 2022 and 2025, so the pins hold
+/// across the CI matrix (2019/2022) and the local default image (2025) alike. That stability is a
+/// measured property, not a guarantee — the fixture contains CHECK, DEFAULT, computed-column and
+/// filtered-index definitions, whose text the *server* renders, so a future major version could
+/// legitimately shift a hash. If the container image changes and a hash shifts, that is a signal to
+/// review, not to blindly re-baseline.
 ///
 /// The reference schema is deliberately free of system-generated names (every constraint and index
 /// is explicitly named) because a system name embeds the per-database <c>object_id</c> and so is not
@@ -22,12 +26,14 @@ namespace SqlSchemaHash.IntegrationTests.Settings;
 [TestClass]
 public class RegressionAnchorTests : MatrixTestBase
 {
-    // Pinned hashes for RichReferenceSchema(). Captured from a green run against the
-    // mcr.microsoft.com/mssql/server:2025-latest container. See class remarks.
-    private const string ExpectedStrictHash = "2:vY/vRWoTqrGWuaCaii4KrQXQ6VC4cTOdf5Dh7n4KNLg=";
-    private const string ExpectedV1Hash = "2:B4m0A/jBYmTJjp2Bntya/uHE0OAIN9W7Xo875N1TmMk=";
-    private const string ExpectedV2Hash = "2:vY/vRWoTqrGWuaCaii4KrQXQ6VC4cTOdf5Dh7n4KNLg=";
-    private const string ExpectedStructuralHash = "2:22xjNHhajNzWIcrksmRplmKVppGbGWi5PkOiZ+FVn4I=";
+    // Pinned hashes for RichReferenceSchema(), verified identical on SQL Server 2019-latest and
+    // 2022-latest (the two CI matrix legs) and 2025-latest (the local default image), so one pin per
+    // preset holds everywhere the suite runs. Re-capture on more than one major version before
+    // changing these — a value that reproduces on only one image is not a baseline. See class remarks.
+    private const string ExpectedStrictHash = "2:gLr4x9A7PihhfsXYPpt1Zo90HIndDzb4yrusSxuhfI4=";
+    private const string ExpectedV1Hash = "2:CrmF/kTqUZ+zHHAYBv3NF16NaLgg59bfx6RyCe0Wlg0=";
+    private const string ExpectedV2Hash = "2:gLr4x9A7PihhfsXYPpt1Zo90HIndDzb4yrusSxuhfI4=";
+    private const string ExpectedStructuralHash = "2:J3R2NCsIGkJBYr1fVt7Kob6/+GxPX1jqt7VpljrkQbQ=";
 
     /// <summary>
     /// A deliberately rich, fully explicitly-named schema exercising most catalog surfaces the hasher
