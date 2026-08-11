@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!--
+      Runs on every TFM the library ships, which the MSTest suite cannot: Microsoft.NET.Test.Sdk and
+      MSTest.TestAdapter publish no assets below net8.0, so a test project cannot even target the
+      older ones. Keep this list in lockstep with the library's TargetFrameworks — that lockstep is
+      the whole point, and letting it drift silently re-creates the untested-target gap that this
+      project was added to close.
+    -->
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+
+    <!--
+      Program lives in namespace SmokeTests, not the assembly-name default: a `SqlSchemaHash.*`
+      namespace would shadow the library's `SqlSchemaHash` facade class at every call site.
+    -->
+    <RootNamespace>SmokeTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\zachtbeer.SqlSchemaHasher.csproj" />
+  </ItemGroup>
+
+</Project>

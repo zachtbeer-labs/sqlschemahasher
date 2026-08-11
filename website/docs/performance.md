@@ -120,7 +120,7 @@ are committed under
 - **The database was SQL Server LocalDB on the same machine.** There is no network between client
   and server, so extraction times are a floor. A networked or cloud database will be slower, and the
   gap grows with round-trip count — which means the Large profile suffers most.
-- **Benchmarks target `net10.0` only.** The package targets `net6.0` through `net10.0`; these
+- **Benchmarks target `net10.0` only.** The package targets `net8.0` through `net10.0`; these
   numbers are not a promise about the others.
 - **Synthetic schemas, not yours.** A database with unusually wide tables, very large module bodies,
   or heavy extended-property use will differ.

@@ -57,3 +57,11 @@ Every other in-scope object kind (tables, procedures, table types, views, functi
 
 - **Orphaned ex-history tables** — after `ALTER TABLE ... SET (SYSTEM_VERSIONING = OFF)`, an anonymous history table (`MSSQL_TemporalHistoryFor_<object_id>`) is left behind as an ordinary table. At that point it genuinely *is* an ordinary table with a real (if ugly) name, so its raw name hashing exactly is accepted rather than treated as a gap. **Workaround:** rename the orphaned table, or add it to `ObjectNamesToIgnore`.
 - **Extended properties on an anonymous history table** — an extended property targeting an anonymous history table resolves to the table's raw, non-deterministic name; the name normalization applied to the table itself doesn't extend to properties that reference it. Rare enough (extended properties are seldom attached to an auto-named history table rather than its versioned parent) that it isn't worth the extra join today.
+
+## Server version coverage
+
+The documented minimum is SQL Server 2016 (13.x), but **2016 is not exercised by CI** — Microsoft publishes no `mcr.microsoft.com/mssql/server:2016-latest` container image, so there is nothing for the integration suite to run against. CI covers 2017, 2019 and 2022; the suite defaults to 2025 locally.
+
+This matters for exactly one code path. Temporal history retention (`sys.tables.history_retention_period` / `history_retention_period_unit_desc`) arrived in SQL Server 2017, so extraction selects `NULL` literals instead of those columns on older servers. SQL Server 2017 is major version 14, so every CI leg takes the *modern* branch — the pre-2017 substitution has never executed against a real server. Everything else in extraction is version-independent.
+
+**If you run SQL Server 2016:** the library is expected to work and nothing in it deliberately excludes 2016, but that expectation rests on the catalog columns being read, not on a passing test run. Treat a 2016 deployment as the one configuration where you should verify a known-unchanged database hashes stably before trusting the output, and please report anything that doesn't.

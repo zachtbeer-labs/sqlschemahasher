@@ -1,6 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+    <!--
+      net6.0/net7.0 were dropped in 2.0.0. They were not merely EOL — they were broken: those TFMs
+      bind Microsoft.Data.SqlClient's netstandard2.0 asset, whose only runtime implementation is
+      win/net462, so on Linux/macOS the first SqlConnection.OpenAsync threw NullReferenceException.
+      tests/SqlSchemaHash.SmokeTests is what proved it; it now runs every TFM listed here.
+    -->
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
     <!-- NuGet Package Metadata -->
@@ -17,9 +23,6 @@
     <PackageProjectUrl>https://zachtbeer-labs.github.io/sqlschemahasher/</PackageProjectUrl>
     <Copyright>Copyright (c) 2026 Zachtbeer Labs B.V.</Copyright>
     <PackageReleaseNotes>https://github.com/zachtbeer-labs/sqlschemahasher/releases</PackageReleaseNotes>
-
-    <!-- Suppress warnings from transitive dependencies that don't officially target net6.0/net7.0 -->
-    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
   </PropertyGroup>
 
   <ItemGroup>

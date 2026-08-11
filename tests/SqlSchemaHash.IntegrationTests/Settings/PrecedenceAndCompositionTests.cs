@@ -70,12 +70,18 @@ public class PrecedenceAndCompositionTests : MatrixTestBase
             "CREATE TABLE dbo.T (Id INT NOT NULL CONSTRAINT PK_T PRIMARY KEY CLUSTERED, A INT NOT NULL, B INT NOT NULL)",
             "CREATE INDEX IX_T_AB ON dbo.T(A DESC, B ASC)");
 
+        // All five domains, not just the three that currently carry loosening bits: Columns.Structural
+        // and Modules.Structural are both Strict today, so including them changes nothing about this
+        // assertion right now — but it is what keeps the test honest to its name if either domain
+        // later gains a bit that the preset forgets to pick up.
         var composed = new SchemaHashOptions
         {
             IgnoreSysDiagramObjects = true,
             Tables = TableNormalization.Structural,
+            Columns = ColumnNormalization.Structural,
             Indexes = IndexNormalization.Structural,
             Constraints = ConstraintNormalization.Structural,
+            Modules = ModuleNormalization.Structural,
         };
 
         Hash(schema, SchemaHashOptions.Structural).ShouldBe(Hash(schema, composed),

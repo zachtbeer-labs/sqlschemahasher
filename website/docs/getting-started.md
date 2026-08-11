@@ -15,8 +15,8 @@ dotnet add package zachtbeer.SqlSchemaHasher
 ## Requirements
 
 - **SQL Server**: 2016 (13.x) or later, or Azure SQL. Extraction reads catalog columns introduced in 2016 (temporal `temporal_type`/`generated_always_type`, `sys.masked_columns`, `encryption_type_desc`), so older servers are not supported.
-- **Exercised against**: SQL Server 2019 and 2022 in CI, SQL Server 2025 locally in the test suite.
-- **.NET**: targets `net6.0`, `net7.0`, `net8.0`, `net9.0`, and `net10.0`.
+- **Exercised against**: SQL Server 2017, 2019 and 2022 in CI, SQL Server 2025 locally in the test suite. 2016 is supported but not covered by CI — see [Known Limitations](./known-limitations.md#server-version-coverage).
+- **.NET**: targets `net8.0`, `net9.0`, and `net10.0`. Every target is executed against a real SQL Server in CI. 1.x targeted `net6.0`/`net7.0`; 2.0.0 drops them.
 
 ## Quickstart
 

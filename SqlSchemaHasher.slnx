@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SqlSchemaHash.IntegrationTests/SqlSchemaHash.IntegrationTests.csproj" />
+    <Project Path="tests/SqlSchemaHash.SmokeTests/SqlSchemaHash.SmokeTests.csproj" />
     <Project Path="tests/SqlSchemaHash.UnitTests/SqlSchemaHash.UnitTests.csproj" />
   </Folder>
   <Project Path="src/zachtbeer.SqlSchemaHasher.csproj" />

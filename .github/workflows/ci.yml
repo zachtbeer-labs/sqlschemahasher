@@ -49,7 +49,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sqlserver: ['2019-latest', '2022-latest']
+        # 2017 is the oldest server with a published container image. The documented floor is
+        # 2016 (13.x); its one version-conditional code path — SupportsTemporalRetention's
+        # pre-2017 branch — therefore stays unexercised by CI. See website/docs/known-limitations.md.
+        sqlserver: ['2017-latest', '2019-latest', '2022-latest']
     env:
       SQLSERVER_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.sqlserver }}
     steps:
@@ -73,6 +76,82 @@ jobs:
     - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
     - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
     - run: dotnet test SqlSchemaHasher.slnx -c Release --no-build --verbosity normal
+
+  # The MSTest suite only runs on net10.0 (Microsoft.NET.Test.Sdk and MSTest.TestAdapter publish no
+  # assets below net8.0), so this job is the only thing that actually *executes* the library on every
+  # TFM it publishes. That gap is not hypothetical: it is what hid net6.0/net7.0 being outright broken
+  # — they bound Microsoft.Data.SqlClient's netstandard2.0 asset, which has no Unix implementation, and
+  # threw NullReferenceException on the first connection. Both were dropped in 2.0.0 as a result.
+  # This checks end-to-end plumbing only; hash *semantics* are TFM-independent and covered by `integration`.
+  tfm-smoke:
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        # A plain service container, not Testcontainers: the smoke runner is dependency-free by
+        # design, so that what it exercises is the library's own dependency closure and nothing else.
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          # Throwaway credential for an ephemeral container reachable only from this runner. Matches
+          # the literal already used by SqlServerFixture.cs; inlined here because the `env` context is
+          # not dependable inside a `services` block.
+          MSSQL_SA_PASSWORD: 'DeepDishD@tabas3!'
+        ports:
+          - 1433:1433
+        # Gates the steps below on SQL Server actually accepting logins, not just opening the port.
+        # The sqlcmd path is image-specific (mssql-tools18 ships in the 2022 image) — if this image
+        # tag is ever bumped, re-check the path first.
+        options: >-
+          --health-cmd="/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'DeepDishD@tabas3!' -C -Q 'SELECT 1'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=20s
+    steps:
+    # fetch-depth: 0 for MinVer — it needs full history and tags to compute the version.
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      with:
+        fetch-depth: 0
+
+    # Every TFM listed here needs its *runtime* present to be executed, not just built. Installing
+    # each SDK is the simplest way to get that — setup-dotnet has no runtime-only mode. global.json
+    # still pins the 10.0.x SDK for the build itself; the older ones are here purely to run on.
+    # Keep this list in lockstep with the smoke project's TargetFrameworks.
+    - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+      with:
+        dotnet-version: |
+          8.0.x
+          9.0.x
+          10.0.x
+
+    - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ hashFiles('**/packages.lock.json') }}
+        restore-keys: nuget-
+
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
+    - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
+
+    - name: Smoke-run every shipped TFM
+      env:
+        SMOKE_CONNECTION_STRING: 'Server=127.0.0.1,1433;User Id=sa;Password=DeepDishD@tabas3!;TrustServerCertificate=true;Encrypt=false'
+      run: |
+        failed=()
+        for tfm in net8.0 net9.0 net10.0; do
+          echo "::group::$tfm"
+          if dotnet run --project tests/SqlSchemaHash.SmokeTests -c Release -f "$tfm" --no-build; then
+            echo "$tfm passed"
+          else
+            failed+=("$tfm")
+          fi
+          echo "::endgroup::"
+        done
+        # Every TFM runs even after one fails, so a single job reports the full picture.
+        if [ ${#failed[@]} -ne 0 ]; then
+          echo "::error::Smoke run failed on: ${failed[*]}"
+          exit 1
+        fi
 
   security-scan:
     runs-on: ubuntu-latest

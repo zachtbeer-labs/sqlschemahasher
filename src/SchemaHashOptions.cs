@@ -65,8 +65,10 @@ public sealed class SchemaHashOptions
 	{
 		IgnoreSysDiagramObjects = true,
 		Tables = TableNormalization.Structural,
+		Columns = ColumnNormalization.Structural,
 		Indexes = IndexNormalization.Structural,
 		Constraints = ConstraintNormalization.Structural,
+		Modules = ModuleNormalization.Structural,
 	};
 
 	/// <summary>

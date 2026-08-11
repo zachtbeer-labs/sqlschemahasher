@@ -8,7 +8,7 @@ One deterministic SHA256 per database schema — ground truth for drift detectio
 [![NuGet](https://img.shields.io/nuget/v/zachtbeer.SqlSchemaHasher)](https://www.nuget.org/packages/zachtbeer.SqlSchemaHasher)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/zachtbeer.SqlSchemaHasher)](https://www.nuget.org/packages/zachtbeer.SqlSchemaHasher)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Target frameworks](https://img.shields.io/badge/targets-net6.0%20%7C%20net7.0%20%7C%20net8.0%20%7C%20net9.0%20%7C%20net10.0-512bd4.svg)](src/zachtbeer.SqlSchemaHasher.csproj)
+[![Target frameworks](https://img.shields.io/badge/targets-net8.0%20%7C%20net9.0%20%7C%20net10.0-512bd4.svg)](src/zachtbeer.SqlSchemaHasher.csproj)
 [![Docs](https://img.shields.io/badge/docs-online-512bd4.svg)](https://zachtbeer-labs.github.io/sqlschemahasher/)
 
 📖 **[Full documentation →](https://zachtbeer-labs.github.io/sqlschemahasher/)**
@@ -24,8 +24,8 @@ dotnet add package zachtbeer.SqlSchemaHasher
 ## Requirements
 
 - **SQL Server**: 2016 (13.x) or later, or Azure SQL. Extraction reads catalog columns introduced in 2016 (temporal `temporal_type`/`generated_always_type`, `sys.masked_columns`, `encryption_type_desc`), so older servers are not supported.
-- **Exercised against**: SQL Server 2019 and 2022 in CI, SQL Server 2025 locally in the test suite.
-- **.NET**: targets `net6.0`, `net7.0`, `net8.0`, `net9.0`, and `net10.0`.
+- **Exercised against**: SQL Server 2017, 2019 and 2022 in CI, SQL Server 2025 locally in the test suite. 2016 is supported but not covered by CI — no container image is published for it. See [Known Limitations](https://zachtbeer-labs.github.io/sqlschemahasher/known-limitations).
+- **.NET**: targets `net8.0`, `net9.0`, and `net10.0`. Every target is executed against a real SQL Server in CI. 1.x targeted `net6.0`/`net7.0`; 2.0.0 drops them (see the changelog).
 
 ## Quickstart
 

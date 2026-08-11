@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
-This is a .NET 9 class library with integration tests. The solution file is `SqlSchemaHasher.slnx` at the repo root.
+This is a multi-targeted class library (`net8.0;net9.0;net10.0`) with integration tests. The solution file is `SqlSchemaHasher.slnx` at the repo root.
 
 ```bash
 dotnet build SqlSchemaHasher.slnx
@@ -14,7 +14,13 @@ dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 
 Integration tests use Testcontainers to spin up SQL Server 2025 in Docker. Docker must be running to execute tests.
 
-**Running the tests — delegate to the `test-runner` subagent.** When you need to run the integration suite (after a change, before committing, to check the build, or to verify a specific area), invoke the `test-runner` agent via the Task tool instead of running `dotnet test` yourself. It handles the Docker/Testcontainers bootstrap, keeps the ~193-test output out of your context, and returns a structured pass/fail report; it can also infer and run a subset from your wording. Run `dotnet test` directly only when the subagent is genuinely unavailable.
+Three test projects, only two of which `dotnet test` sees:
+
+- `tests/SqlSchemaHash.UnitTests` — DB-free, fast (net10.0).
+- `tests/SqlSchemaHash.IntegrationTests` — the fidelity suite, Testcontainers-backed (net10.0).
+- `tests/SqlSchemaHash.SmokeTests` — **a console app, not a test project**, so `dotnet test` skips it; the `tfm-smoke` CI job runs it. It is the only thing that executes the library on *every* TFM it ships, because the test SDKs publish no assets below net8.0. It exists because that blind spot hid a real shipped defect: 1.x advertised net6.0/net7.0, which bound Microsoft.Data.SqlClient's netstandard2.0 asset (no Unix implementation) and threw `NullReferenceException` on the first connection. **Keep its `TargetFrameworks` in lockstep with the library's** — if they drift, the untested-target gap silently returns.
+
+**Running the tests — delegate to the `test-runner` subagent.** When you need to run the integration suite (after a change, before committing, to check the build, or to verify a specific area), invoke the `test-runner` agent via the Task tool instead of running `dotnet test` yourself. It handles the Docker/Testcontainers bootstrap, keeps the ~200-test output out of your context, and returns a structured pass/fail report; it can also infer and run a subset from your wording. Run `dotnet test` directly only when the subagent is genuinely unavailable.
 
 ## Architecture
 

@@ -15,7 +15,7 @@ Use [GitHub Issues](https://github.com/zachtbeer-labs/sqlschemahasher/issues). F
 
 ### Prerequisites
 
-- [.NET SDK](https://dotnet.microsoft.com/download) matching the version pinned in `global.json` (the library multi-targets `net6.0` through `net10.0`; building the `net10.0` target requires a 10.0.x SDK)
+- [.NET SDK](https://dotnet.microsoft.com/download) matching the version pinned in `global.json` (the library multi-targets `net8.0` through `net10.0`; building the `net10.0` target requires a 10.0.x SDK)
 - [Docker](https://www.docker.com/) (for integration tests -- Testcontainers spins up SQL Server 2025)
 - [SQL Server LocalDB](https://learn.microsoft.com/sql/database-engine/configure-windows/sql-server-express-localdb) (benchmarks only -- the integration benchmark tier defaults to LocalDB; see Benchmarks below)
 
