@@ -12,6 +12,6 @@ Steps to verify the change works correctly.
 
 ## Checklist
 
-- [ ] Tests pass (`dotnet test SqlSchemaHasher.sln`)
+- [ ] Tests pass (`dotnet test SqlSchemaHasher.slnx`)
 - [ ] New behavior has test coverage
 - [ ] No breaking changes (or documented in description)

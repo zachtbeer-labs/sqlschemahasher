@@ -69,6 +69,21 @@ public static class DatabaseTestHelpers
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Adds a MEMORY_OPTIMIZED_DATA filegroup and file to a test database so it can host memory-optimized
+    /// tables. Must be called once per database before creating any memory-optimized table. The file path
+    /// is inside the Linux container's default data directory; dropping the database (test cleanup) also
+    /// removes the filegroup file.
+    /// </summary>
+    public static async Task EnableMemoryOptimizedAsync(string dbName)
+    {
+        await using var connection = new SqlConnection(GetConnectionString(dbName));
+        await connection.OpenAsync();
+        await connection.ExecuteAsync($@"
+            ALTER DATABASE [{dbName}] ADD FILEGROUP [{dbName}_mod] CONTAINS MEMORY_OPTIMIZED_DATA;
+            ALTER DATABASE [{dbName}] ADD FILE (NAME='{dbName}_mod1', FILENAME='/var/opt/mssql/data/{dbName}_mod') TO FILEGROUP [{dbName}_mod];");
+    }
+
     #endregion
 
     #region Schema Creation Helpers

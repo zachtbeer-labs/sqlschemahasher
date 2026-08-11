@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -8,8 +10,14 @@ namespace zachtbeer.SqlSchemaHasher;
 /// Computes deterministic SHA256 hashes from schema metadata for comparison.
 /// Uses IncrementalHash for memory-efficient streaming.
 /// All object names are schema-qualified to correctly distinguish objects in different schemas.
+///
+/// Every field is hashed unconditionally in a fixed order. Strings are length-prefixed (so "AB"+"C"
+/// cannot collide with "A"+"BC") and collections are count-prefixed (so the boundary between two
+/// adjacent lists is unambiguous). Normalization options are applied by projecting each element to
+/// its <em>effective</em> value before it is sorted and hashed, so option-equivalent databases sort
+/// their elements the same way and hash identically.
 /// </summary>
-public sealed class SchemaHashCalculator
+internal sealed class SchemaHashCalculator
 {
     private readonly SchemaHashOptions _options;
 
@@ -39,22 +47,77 @@ public sealed class SchemaHashCalculator
     {
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-        // Hash tables in sorted order by fully-qualified name
-        foreach (var table in schema.Tables.OrderBy(t => t.SchemaName).ThenBy(t => t.Name))
+        // Hash tables in sorted order by fully-qualified name.
+        // All sorts use ordinal comparison: culture-sensitive sorting would make the
+        // hash depend on the machine's culture and ICU version.
+        var sortedTables = schema.Tables.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => EffectiveTableName(t), StringComparer.Ordinal);
+        foreach (var table in sortedTables)
         {
             HashTable(hasher, table);
         }
 
         // Hash stored procedures in sorted order by fully-qualified name
-        foreach (var proc in schema.StoredProcedures.OrderBy(p => p.SchemaName).ThenBy(p => p.Name))
+        var sortedProcedures = schema.StoredProcedures.OrderBy(p => p.SchemaName, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal);
+        foreach (var proc in sortedProcedures)
         {
             HashStoredProcedure(hasher, proc);
         }
 
         // Hash user-defined table types in sorted order by fully-qualified name
-        foreach (var udt in schema.UserDefinedTableTypes.OrderBy(u => u.SchemaName).ThenBy(u => u.Name))
+        var sortedTableTypes = schema.UserDefinedTableTypes.OrderBy(u => u.SchemaName, StringComparer.Ordinal).ThenBy(u => u.Name, StringComparer.Ordinal);
+        foreach (var udt in sortedTableTypes)
         {
             HashUserDefinedTableType(hasher, udt);
+        }
+
+        // Hash views in sorted order by fully-qualified name. No count prefix and each element opens
+        // with its own marker string, so appending this section changes the hash only for databases
+        // that actually contain views (same for the five sections that follow).
+        var sortedViews = schema.Views.OrderBy(v => v.SchemaName, StringComparer.Ordinal).ThenBy(v => v.Name, StringComparer.Ordinal);
+        foreach (var view in sortedViews)
+        {
+            HashView(hasher, view);
+        }
+
+        // Hash functions in sorted order by fully-qualified name
+        var sortedFunctions = schema.Functions.OrderBy(f => f.SchemaName, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal);
+        foreach (var function in sortedFunctions)
+        {
+            HashFunction(hasher, function);
+        }
+
+        // Hash triggers in sorted order by fully-qualified name
+        var sortedTriggers = schema.Triggers.OrderBy(t => t.SchemaName, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal);
+        foreach (var trigger in sortedTriggers)
+        {
+            HashTrigger(hasher, trigger);
+        }
+
+        // Hash sequences in sorted order by fully-qualified name
+        var sortedSequences = schema.Sequences.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal);
+        foreach (var sequence in sortedSequences)
+        {
+            HashSequence(hasher, sequence);
+        }
+
+        // Hash synonyms in sorted order by fully-qualified name
+        var sortedSynonyms = schema.Synonyms.OrderBy(s => s.SchemaName, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal);
+        foreach (var synonym in sortedSynonyms)
+        {
+            HashSynonym(hasher, synonym);
+        }
+
+        // Hash extended properties in sorted order by class, resolved target, then property name.
+        // Null target parts sort as empty strings; ClassDesc keeps the scopes distinct.
+        var sortedProperties = schema.ExtendedProperties
+            .OrderBy(p => p.ClassDesc, StringComparer.Ordinal)
+            .ThenBy(p => p.SchemaName ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(p => p.ObjectName ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(p => p.SubObjectName ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(p => p.Name, StringComparer.Ordinal);
+        foreach (var property in sortedProperties)
+        {
+            HashExtendedProperty(hasher, property);
         }
 
         var hash = hasher.GetHashAndReset();
@@ -67,36 +130,70 @@ public sealed class SchemaHashCalculator
         AppendString(hasher, "TABLE:");
         // Include schema name to distinguish dbo.Employees from reporting.Employees
         AppendString(hasher, table.SchemaName);
-        AppendString(hasher, table.Name);
+        // An anonymous temporal history table's raw name embeds its parent's object_id
+        // (MSSQL_TemporalHistoryFor_<id>), which is not stable across databases; EffectiveTableName
+        // substitutes a name derived from the versioned parent instead. Unconditional — this removes an
+        // object-id artifact, not schema fidelity, so no normalization bit gates it.
+        AppendString(hasher, EffectiveTableName(table));
 
-        // Identity column
-        if (!string.IsNullOrEmpty(table.IdentityColumn))
-        {
-            AppendString(hasher, "IDENTITY:");
-            AppendString(hasher, table.IdentityColumn);
-        }
+        HashIdentity(hasher, table.IdentityColumn, table.IdentitySeed, table.IdentityIncrement, table.IdentityNotForReplication);
 
-        // Columns in sorted order
-        foreach (var column in table.Columns.OrderBy(c => c.Name))
+        // Temporal / In-Memory OLTP kind: a system-versioned temporal table or a memory-optimized table
+        // is a fundamentally different object from an otherwise-identical plain disk table.
+        AppendString(hasher, "TABLEKIND:");
+        AppendString(hasher, table.TemporalType ?? string.Empty);
+        AppendBool(hasher, table.IsMemoryOptimized);
+        AppendString(hasher, table.DurabilityDesc ?? string.Empty);
+        // Temporal history linkage and retention. The history table name is normalized so an
+        // auto-generated MSSQL_TemporalHistoryFor_<object_id> name (non-deterministic across databases)
+        // collapses to the empty sentinel, while an explicitly-named history table contributes its name.
+        // Under IgnoreTemporalRetention the finite retention policy is neutralized.
+        var ignoreRetention = _options.Tables.HasFlag(TableNormalization.IgnoreTemporalRetention);
+        AppendString(hasher, NormalizeHistoryTableName(table.HistoryTableName));
+        AppendInt(hasher, ignoreRetention ? 0 : (table.HistoryRetentionPeriod ?? 0));
+        AppendString(hasher, ignoreRetention ? string.Empty : (table.HistoryRetentionPeriodUnit ?? string.Empty));
+
+        // Columns in stored (column_id) order, so reordering columns changes the hash — column position
+        // is behaviorally significant for positional access (SELECT *, INSERT without a column list).
+        // Under IgnoreColumnOrder they are ordered by name instead, making column order irrelevant.
+        // (Table types keep column-order significance unconditionally; see HashUserDefinedTableType.)
+        var orderedColumns = _options.Tables.HasFlag(TableNormalization.IgnoreColumnOrder)
+            ? table.Columns.OrderBy(c => c.Name, StringComparer.Ordinal)
+            : table.Columns.OrderBy(c => c.ColumnId).ThenBy(c => c.Name, StringComparer.Ordinal);
+        foreach (var column in orderedColumns)
         {
             HashColumn(hasher, column);
         }
 
-        // Indexes in sorted order (by keys then name)
-        foreach (var index in table.Indexes.OrderBy(i => i.Keys).ThenBy(i => i.Name))
-        {
-            HashIndex(hasher, index);
-        }
+        HashIndexes(hasher, table.Indexes, HistoryIndexNameRewrite(table));
+        HashKeyConstraints(hasher, table.KeyConstraints);
+        HashForeignKeys(hasher, table.ForeignKeys);
+        HashCheckConstraints(hasher, table.CheckConstraints);
+        HashDefaultConstraints(hasher, table.DefaultConstraints);
+    }
 
-        // Constraints in sorted order (by keys then type)
-        foreach (var constraint in table.Constraints.OrderBy(c => c.Keys).ThenBy(c => c.Type))
-        {
-            HashConstraint(hasher, constraint);
-        }
+    private void HashIdentity(IncrementalHash hasher, string? identityColumn, string? seed, string? increment, bool notForReplication)
+    {
+        // Identity column, including its seed/increment and NOT FOR REPLICATION flag so that
+        // IDENTITY(1,1) and IDENTITY(1000,5) on the same column hash differently. The block is present
+        // only when an identity column exists, so non-identity containers are unaffected.
+        // IgnoreIdentitySeed neutralizes the seed/increment; IgnoreIdentityNotForReplication the NFR flag.
+        // These Table bits govern identity wherever it appears (tables and table types).
+        if (string.IsNullOrEmpty(identityColumn))
+            return;
+
+        var ignoreSeed = _options.Tables.HasFlag(TableNormalization.IgnoreIdentitySeed);
+        AppendString(hasher, "IDENTITY:");
+        AppendString(hasher, identityColumn);
+        AppendString(hasher, ignoreSeed ? string.Empty : (seed ?? string.Empty));
+        AppendString(hasher, ignoreSeed ? string.Empty : (increment ?? string.Empty));
+        AppendBool(hasher, _options.Tables.HasFlag(TableNormalization.IgnoreIdentityNotForReplication) ? false : notForReplication);
     }
 
     private void HashColumn(IncrementalHash hasher, ColumnSchema column)
     {
+        var cols = _options.Columns;
+        var ignoreMasking = cols.HasFlag(ColumnNormalization.IgnoreDynamicDataMasking);
         AppendString(hasher, "COL:");
         AppendString(hasher, column.Name);
         AppendString(hasher, column.DataType);
@@ -104,33 +201,170 @@ public sealed class SchemaHashCalculator
         AppendInt(hasher, column.Precision);
         AppendInt(hasher, column.Scale);
         AppendBool(hasher, column.IsNullable);
+        AppendBool(hasher, column.IsComputed);
+        AppendString(hasher, column.ComputedDefinition ?? string.Empty);
+        AppendBool(hasher, column.IsPersisted);
+        AppendString(hasher, cols.HasFlag(ColumnNormalization.IgnoreCollation) ? string.Empty : (column.CollationName ?? string.Empty));
+        AppendBool(hasher, column.IsSparse);
+        AppendBool(hasher, column.IsRowGuidCol);
+        AppendBool(hasher, column.IsFilestream);
+        AppendBool(hasher, ignoreMasking ? false : column.IsMasked);
+        AppendString(hasher, ignoreMasking ? string.Empty : (column.MaskingFunction ?? string.Empty));
+        AppendString(hasher, column.EncryptionTypeDesc ?? string.Empty);
+        AppendString(hasher, column.XmlSchemaCollectionName ?? string.Empty);
+        AppendBool(hasher, column.IsXmlDocument);
+        AppendString(hasher, column.GeneratedAlwaysType ?? string.Empty);
+        AppendBool(hasher, column.IsHidden);
+        AppendBool(hasher, cols.HasFlag(ColumnNormalization.IgnoreAnsiPadding) ? true : column.IsAnsiPadded);
     }
 
-    private void HashIndex(IncrementalHash hasher, IndexSchema index)
+    private void HashIndexes(IncrementalHash hasher, List<IndexSchema> indexes, Func<string, string>? nameRewrite = null)
     {
-        AppendString(hasher, "IDX:");
-
-        // Use normalized or exact name based on options
-        string indexName = _options.NormalizeAutoGeneratedIndexNames
-            ? NormalizeAutoGeneratedName(index.Name)
-            : index.Name;
-
-        AppendString(hasher, indexName);
-
-        // Optionally normalize clustering type
-        string description = _options.NormalizeClusteringType
-            ? NormalizeClusteringDescription(index.Description)
-            : index.Description;
-
-        AppendString(hasher, description);
-        AppendString(hasher, index.Keys ?? string.Empty);
+        // Project each index to its effective (post-option) values, then sort by those values so that
+        // option-equivalent databases order their indexes identically before hashing. nameRewrite is an
+        // unconditional pre-step (used only for an anonymous temporal history table's auto-created
+        // index) applied before the option-gated name normalization below.
+        var effectiveIndexes = indexes.Select(i => GetEffectiveIndex(i, nameRewrite)).OrderBy(IndexSortKey, StringComparer.Ordinal);
+        foreach (var index in effectiveIndexes)
+        {
+            AppendString(hasher, "IDX:");
+            AppendString(hasher, index.Name);
+            AppendString(hasher, index.TypeDesc);
+            AppendBool(hasher, index.IsUnique);
+            AppendBool(hasher, index.IsUniqueConstraint);
+            AppendBool(hasher, index.IsPrimaryKey);
+            AppendBool(hasher, index.IsDisabled);
+            AppendBool(hasher, index.IgnoreDupKey);
+            AppendKeyColumns(hasher, index.KeyColumns);
+            AppendInt(hasher, index.IncludedColumns.Count);
+            foreach (var included in index.IncludedColumns)
+                AppendString(hasher, included);
+            AppendString(hasher, index.FilterDefinition ?? string.Empty);
+            // XML index sub-type. Every XML index flavour shares TypeDesc "XML", so without these a
+            // secondary index FOR PATH, FOR VALUE and FOR PROPERTY — and a primary vs a selective XML
+            // index — would all collide. Both fields are null for every non-XML index; the whole block
+            // is skipped in that case (rather than hashing two empty strings, whose length prefixes
+            // would still add bytes) so that a database with no XML indexes hashes byte-identically to
+            // one produced before this field existed. The marker keeps the encoding unambiguous.
+            if (index.XmlSecondaryTypeDesc is not null || index.XmlIndexTypeDescription is not null)
+            {
+                AppendString(hasher, "XMLIDX:");
+                AppendString(hasher, index.XmlSecondaryTypeDesc ?? string.Empty);
+                AppendString(hasher, index.XmlIndexTypeDescription ?? string.Empty);
+            }
+            // Physical storage / locking options. These are behavioral (ALLOW_PAGE_LOCKS=OFF changes
+            // locking) and physical (FILLFACTOR/PAD_INDEX affect page density), captured under the exact baseline.
+            AppendInt(hasher, index.FillFactor);
+            AppendBool(hasher, index.IsPadded);
+            AppendBool(hasher, index.AllowRowLocks);
+            AppendBool(hasher, index.AllowPageLocks);
+        }
     }
 
-    private void HashConstraint(IncrementalHash hasher, ConstraintSchema constraint)
+    private void HashKeyConstraints(IncrementalHash hasher, List<KeyConstraintSchema> constraints)
     {
-        AppendString(hasher, "CONST:");
-        AppendString(hasher, constraint.Type);
-        AppendString(hasher, constraint.Keys ?? string.Empty);
+        var keyConstraints = constraints
+            .Select(c => (c.Type, Name: EffectiveConstraintName(c.Name, c.IsSystemNamed), Keys: EffectiveKeyColumns(c.KeyColumns)))
+            .OrderBy(x => x.Type, StringComparer.Ordinal)
+            .ThenBy(x => x.Name, StringComparer.Ordinal)
+            .ThenBy(x => KeyColumnsSortKey(x.Keys), StringComparer.Ordinal);
+        foreach (var kc in keyConstraints)
+        {
+            AppendString(hasher, "KEYCONST:");
+            AppendString(hasher, kc.Type);
+            AppendString(hasher, kc.Name);
+            AppendKeyColumns(hasher, kc.Keys);
+        }
+    }
+
+    private void HashForeignKeys(IncrementalHash hasher, List<ForeignKeyConstraintSchema> foreignKeys)
+    {
+        // The sort key covers every hashed field so ordering is a total order over the record's content:
+        // when Constraints.IgnoreNames collapses Name to the empty sentinel, the enforcement flags still
+        // break ties (two FKs to the same table over the same columns can differ only in NOCHECK state),
+        // and the extraction queries carry no ORDER BY to fall back on.
+        var sortedForeignKeys = foreignKeys
+            .Select(f => (
+                f.ReferencedSchema,
+                f.ReferencedTable,
+                f.ColumnPairs,
+                f.DeleteAction,
+                f.UpdateAction,
+                Name: EffectiveConstraintName(f.Name, f.IsSystemNamed),
+                IsDisabled: EffectiveConstraintDisabled(f.IsDisabled),
+                IsNotTrusted: EffectiveConstraintTrust(f.IsNotTrusted),
+                IsNotForReplication: EffectiveConstraintNotForReplication(f.IsNotForReplication)))
+            .OrderBy(x => x.ReferencedSchema, StringComparer.Ordinal)
+            .ThenBy(x => x.ReferencedTable, StringComparer.Ordinal)
+            .ThenBy(x => ForeignKeyColumnPairsSortKey(x.ColumnPairs), StringComparer.Ordinal)
+            .ThenBy(x => x.DeleteAction, StringComparer.Ordinal)
+            .ThenBy(x => x.UpdateAction, StringComparer.Ordinal)
+            .ThenBy(x => x.Name, StringComparer.Ordinal)
+            .ThenBy(x => x.IsDisabled)
+            .ThenBy(x => x.IsNotTrusted)
+            .ThenBy(x => x.IsNotForReplication);
+        foreach (var fk in sortedForeignKeys)
+        {
+            AppendString(hasher, "FK:");
+            AppendString(hasher, fk.Name);
+            AppendString(hasher, fk.ReferencedSchema);
+            AppendString(hasher, fk.ReferencedTable);
+            AppendInt(hasher, fk.ColumnPairs.Count);
+            foreach (var pair in fk.ColumnPairs)
+            {
+                AppendString(hasher, pair.ParentColumn);
+                AppendString(hasher, pair.ReferencedColumn);
+            }
+            AppendString(hasher, fk.DeleteAction);
+            AppendString(hasher, fk.UpdateAction);
+            AppendBool(hasher, fk.IsDisabled);
+            AppendBool(hasher, fk.IsNotTrusted);
+            AppendBool(hasher, fk.IsNotForReplication);
+        }
+    }
+
+    private void HashCheckConstraints(IncrementalHash hasher, List<CheckConstraintSchema> constraints)
+    {
+        // Sort by every hashed field (see HashForeignKeys): under Constraints.IgnoreNames two CHECK
+        // constraints can share a predicate and differ only in enforcement state, and the extraction
+        // query has no ORDER BY, so the enforcement flags must participate in the ordering.
+        var checkConstraints = constraints
+            .Select(c => (
+                c.Definition,
+                Name: EffectiveConstraintName(c.Name, c.IsSystemNamed),
+                IsDisabled: EffectiveConstraintDisabled(c.IsDisabled),
+                IsNotTrusted: EffectiveConstraintTrust(c.IsNotTrusted),
+                IsNotForReplication: EffectiveConstraintNotForReplication(c.IsNotForReplication)))
+            .OrderBy(x => x.Definition, StringComparer.Ordinal)
+            .ThenBy(x => x.Name, StringComparer.Ordinal)
+            .ThenBy(x => x.IsDisabled)
+            .ThenBy(x => x.IsNotTrusted)
+            .ThenBy(x => x.IsNotForReplication);
+        foreach (var ck in checkConstraints)
+        {
+            AppendString(hasher, "CHECK:");
+            AppendString(hasher, ck.Name);
+            AppendString(hasher, ck.Definition);
+            AppendBool(hasher, ck.IsDisabled);
+            AppendBool(hasher, ck.IsNotTrusted);
+            AppendBool(hasher, ck.IsNotForReplication);
+        }
+    }
+
+    private void HashDefaultConstraints(IncrementalHash hasher, List<DefaultConstraintSchema> constraints)
+    {
+        var defaultConstraints = constraints
+            .Select(c => (Df: c, Name: EffectiveConstraintName(c.Name, c.IsSystemNamed)))
+            .OrderBy(x => x.Df.ColumnName, StringComparer.Ordinal)
+            .ThenBy(x => x.Df.Definition, StringComparer.Ordinal)
+            .ThenBy(x => x.Name, StringComparer.Ordinal);
+        foreach (var df in defaultConstraints)
+        {
+            AppendString(hasher, "DEFAULT:");
+            AppendString(hasher, df.Name);
+            AppendString(hasher, df.Df.ColumnName);
+            AppendString(hasher, df.Df.Definition);
+        }
     }
 
     private void HashStoredProcedure(IncrementalHash hasher, StoredProcedureSchema proc)
@@ -141,11 +375,19 @@ public sealed class SchemaHashCalculator
         AppendString(hasher, proc.Name);
 
         // Optionally include definition hash to detect body changes
-        if (_options.IncludeStoredProcedureText)
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
         {
             AppendString(hasher, "DEFHASH:");
             AppendString(hasher, proc.DefinitionHash);
         }
+
+        // ANSI_NULLS / QUOTED_IDENTIFIER are captured at CREATE time and are not present in the module
+        // text, so they participate independently of the definition hash and of the body-text bit.
+        // IgnoreSetOptions neutralizes them to the default-on value.
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : proc.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : proc.UsesQuotedIdentifier);
 
         foreach (var param in proc.Parameters)
         {
@@ -153,7 +395,7 @@ public sealed class SchemaHashCalculator
         }
     }
 
-    private void HashParameter(IncrementalHash hasher, ParameterSchema param)
+    private static void HashParameter(IncrementalHash hasher, ParameterSchema param)
     {
         AppendString(hasher, "PARAM:");
         AppendString(hasher, param.Name);
@@ -162,6 +404,10 @@ public sealed class SchemaHashCalculator
         AppendInt(hasher, param.Precision);
         AppendInt(hasher, param.Scale);
         AppendBool(hasher, param.IsNullable);
+        AppendBool(hasher, param.IsOutput);
+        AppendBool(hasher, param.IsReadonly);
+        AppendString(hasher, param.XmlSchemaCollectionName ?? string.Empty);
+        AppendBool(hasher, param.IsXmlDocument);
     }
 
     private void HashUserDefinedTableType(IncrementalHash hasher, UserDefinedTableTypeSchema udt)
@@ -171,56 +417,376 @@ public sealed class SchemaHashCalculator
         AppendString(hasher, udt.SchemaName);
         AppendString(hasher, udt.Name);
 
-        foreach (var column in udt.Columns.OrderBy(c => c.Name))
+        HashIdentity(hasher, udt.IdentityColumn, udt.IdentitySeed, udt.IdentityIncrement, udt.IdentityNotForReplication);
+
+        // A memory-optimized table type marshals differently from a disk-based one.
+        AppendString(hasher, "TYPEKIND:");
+        AppendBool(hasher, udt.IsMemoryOptimized);
+
+        // Always in column_id order — a TVP marshals its columns positionally, so column order is part
+        // of the type's wire contract. IgnoreColumnOrder deliberately does NOT relax this (tables only).
+        var orderedColumns = udt.Columns.OrderBy(c => c.ColumnId).ThenBy(c => c.Name, StringComparer.Ordinal);
+        foreach (var column in orderedColumns)
         {
             HashColumn(hasher, column);
         }
+
+        // Inline INDEX declarations on the type. Hashed through the shared HashIndexes, so every
+        // IndexNormalization bit applies to a table type's indexes exactly as it does to a table's.
+        // Emits nothing for a type with no inline indexes, so types that declare none are unaffected.
+        HashIndexes(hasher, udt.Indexes);
+
+        // Table types cannot declare foreign keys, so only key/check/default constraints participate.
+        HashKeyConstraints(hasher, udt.KeyConstraints);
+        HashCheckConstraints(hasher, udt.CheckConstraints);
+        HashDefaultConstraints(hasher, udt.DefaultConstraints);
     }
 
-    private static string NormalizeClusteringDescription(string description)
+    private void HashView(IncrementalHash hasher, ViewSchema view)
     {
-        return Regex.Replace(description, @"(?:non-?)?clustered", "x-clustered", RegexOptions.IgnoreCase);
+        AppendString(hasher, "VIEW:");
+        AppendString(hasher, view.SchemaName);
+        AppendString(hasher, view.Name);
+
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
+        {
+            AppendString(hasher, "DEFHASH:");
+            AppendString(hasher, view.DefinitionHash);
+        }
+
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : view.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : view.UsesQuotedIdentifier);
+
+        // Reuses the table index hashing so all IndexNormalization bits apply to indexed views too;
+        // empty for an ordinary view.
+        HashIndexes(hasher, view.Indexes);
+    }
+
+    private void HashFunction(IncrementalHash hasher, FunctionSchema function)
+    {
+        AppendString(hasher, "FUNC:");
+        AppendString(hasher, function.SchemaName);
+        AppendString(hasher, function.Name);
+        // Unconditional (survives IgnoreBodyText): distinguishes scalar/inline-TVF/multi-statement-TVF,
+        // a shape change that need not touch a byte of body text.
+        AppendString(hasher, function.TypeDesc);
+
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
+        {
+            AppendString(hasher, "DEFHASH:");
+            AppendString(hasher, function.DefinitionHash);
+        }
+
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : function.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : function.UsesQuotedIdentifier);
+
+        // Parameters hash in list order (parameter_id order from extraction); a scalar function's
+        // return-type row (parameter_id = 0) hashes first.
+        foreach (var param in function.Parameters)
+        {
+            HashParameter(hasher, param);
+        }
+    }
+
+    private void HashTrigger(IncrementalHash hasher, TriggerSchema trigger)
+    {
+        AppendString(hasher, "TRIGGER:");
+        AppendString(hasher, trigger.SchemaName);
+        AppendString(hasher, trigger.Name);
+        AppendString(hasher, trigger.ParentSchemaName);
+        AppendString(hasher, trigger.ParentName);
+        // Unconditional — no normalization bits govern triggers in this round.
+        // ConstraintNormalization.IgnoreDisabled is a constraints-domain bit and does not reach triggers.
+        AppendBool(hasher, trigger.IsDisabled);
+        AppendBool(hasher, trigger.IsInsteadOfTrigger);
+        AppendBool(hasher, trigger.IsNotForReplication);
+
+        if (!_options.Modules.HasFlag(ModuleNormalization.IgnoreBodyText))
+        {
+            AppendString(hasher, "DEFHASH:");
+            AppendString(hasher, trigger.DefinitionHash);
+        }
+
+        var ignoreSetOptions = _options.Modules.HasFlag(ModuleNormalization.IgnoreSetOptions);
+        AppendString(hasher, "SET:");
+        AppendBool(hasher, ignoreSetOptions ? true : trigger.UsesAnsiNulls);
+        AppendBool(hasher, ignoreSetOptions ? true : trigger.UsesQuotedIdentifier);
+
+        AppendInt(hasher, trigger.Events.Count);
+        foreach (var evt in trigger.Events)
+        {
+            AppendString(hasher, evt.Type);
+            AppendBool(hasher, evt.IsFirst);
+            AppendBool(hasher, evt.IsLast);
+        }
+    }
+
+    private void HashSequence(IncrementalHash hasher, SequenceSchema sequence)
+    {
+        AppendString(hasher, "SEQUENCE:");
+        AppendString(hasher, sequence.SchemaName);
+        AppendString(hasher, sequence.Name);
+        AppendString(hasher, sequence.DataType);
+        AppendInt(hasher, sequence.Precision);
+        AppendString(hasher, sequence.StartValue);
+        AppendString(hasher, sequence.Increment);
+        AppendString(hasher, sequence.MinimumValue);
+        AppendString(hasher, sequence.MaximumValue);
+        AppendBool(hasher, sequence.IsCycling);
+        AppendBool(hasher, sequence.IsCached);
+        // -1 sentinel keeps "no explicit cache size" (NO CACHE or default CACHE) distinct from any real
+        // size; (IsCached, CacheSize) together encode NO CACHE / default CACHE / CACHE n unambiguously.
+        AppendInt(hasher, sequence.CacheSize ?? -1);
+    }
+
+    private void HashSynonym(IncrementalHash hasher, SynonymSchema synonym)
+    {
+        AppendString(hasher, "SYNONYM:");
+        AppendString(hasher, synonym.SchemaName);
+        AppendString(hasher, synonym.Name);
+        AppendString(hasher, synonym.BaseObjectName);
+    }
+
+    private void HashExtendedProperty(IncrementalHash hasher, ExtendedPropertySchema property)
+    {
+        AppendString(hasher, "EXTPROP:");
+        AppendString(hasher, property.ClassDesc);
+        AppendString(hasher, property.SchemaName ?? string.Empty);
+        AppendString(hasher, property.ObjectName ?? string.Empty);
+        AppendString(hasher, property.SubObjectName ?? string.Empty);
+        AppendString(hasher, property.Name);
+        // A NULL value hashes like an empty string here, but ValueType is also NULL only for a NULL
+        // value (an empty nvarchar value carries ValueType "nvarchar"), so the pair stays unambiguous.
+        AppendString(hasher, property.ValueType ?? string.Empty);
+        AppendString(hasher, property.Value ?? string.Empty);
     }
 
     /// <summary>
-    /// Normalizes auto-generated index/constraint names by removing GUID suffixes.
-    /// e.g., 'nci_wi_Asset_EF8A0893C0DB8B0FC4AD9EABBE187744' -> 'nci_wi_Asset'
+    /// Applies the configured normalization options to an index, producing the values that
+    /// actually participate in the hash.
     /// </summary>
-    private static string NormalizeAutoGeneratedName(string name)
+    private IndexSchema GetEffectiveIndex(IndexSchema index, Func<string, string>? nameRewrite = null)
     {
-        if (string.IsNullOrEmpty(name) || name.Length < 12)
-            return name;
+        var idx = _options.Indexes;
+        var rewrittenName = nameRewrite?.Invoke(index.Name) ?? index.Name;
+        return index with
+        {
+            Name = EffectiveIndexName(rewrittenName),
+            TypeDesc = EffectiveTypeDesc(index.TypeDesc),
+            KeyColumns = EffectiveKeyColumns(index.KeyColumns),
+            FillFactor = idx.HasFlag(IndexNormalization.IgnoreFillFactor) ? (byte)0 : index.FillFactor,
+            IsPadded = idx.HasFlag(IndexNormalization.IgnorePadIndex) ? false : index.IsPadded,
+            AllowRowLocks = idx.HasFlag(IndexNormalization.IgnoreLockOptions) ? true : index.AllowRowLocks,
+            AllowPageLocks = idx.HasFlag(IndexNormalization.IgnoreLockOptions) ? true : index.AllowPageLocks,
+            IsDisabled = idx.HasFlag(IndexNormalization.IgnoreDisabled) ? false : index.IsDisabled,
+        };
+    }
+
+    // IgnoreNames wins over NormalizeAutoGeneratedNames. Auto-generated names hash as the
+    // empty-string sentinel (length-prefixed hashing keeps "" unambiguous).
+    private string EffectiveIndexName(string name)
+    {
+        if (_options.Indexes.HasFlag(IndexNormalization.IgnoreNames))
+            return string.Empty;
+        return _options.Indexes.HasFlag(IndexNormalization.NormalizeAutoGeneratedNames) && IsAutoGeneratedName(name) ? string.Empty : name;
+    }
+
+    // Constraint names mirror the exact index-name comparison: ignored entirely, normalized to the
+    // empty sentinel for auto-generated names, or compared exactly. Under NormalizeAutoGeneratedNames
+    // a name is treated as auto-generated when the authoritative catalog flag sys.*.is_system_named is
+    // set OR the name matches the generated shape (the same IsAutoGeneratedName heuristic indexes use).
+    // The flag alone is not enough: it is set at CREATE time from whether that statement supplied a
+    // name, so scripting a system-named constraint out and recreating it with its literal name flips
+    // is_system_named to 0 even though the name is still obviously generated. The shape check survives
+    // that script-out / DACPAC boundary; the flag still catches freshly-minted names whose shape may
+    // differ. IgnoreNames still wins over this.
+    private string EffectiveConstraintName(string name, bool isSystemNamed)
+    {
+        if (_options.Constraints.HasFlag(ConstraintNormalization.IgnoreNames))
+            return string.Empty;
+        return _options.Constraints.HasFlag(ConstraintNormalization.NormalizeAutoGeneratedNames) && (isSystemNamed || IsAutoGeneratedName(name)) ? string.Empty : name;
+    }
+
+    // FK/CHECK enforcement state: neutralized to the trusted/enabled/replicated value when the
+    // corresponding Constraint bit is set. These feed both the hash and the ordering sort keys.
+    private bool EffectiveConstraintDisabled(bool isDisabled) => _options.Constraints.HasFlag(ConstraintNormalization.IgnoreDisabled) ? false : isDisabled;
+
+    private bool EffectiveConstraintTrust(bool isNotTrusted) => _options.Constraints.HasFlag(ConstraintNormalization.IgnoreTrust) ? false : isNotTrusted;
+
+    private bool EffectiveConstraintNotForReplication(bool isNotForReplication) => _options.Constraints.HasFlag(ConstraintNormalization.IgnoreNotForReplication) ? false : isNotForReplication;
+
+    // NormalizeClustering collapses only the rowstore B-tree CLUSTERED/NONCLUSTERED placement to a
+    // common token. Every other sys.indexes.type_desc value names a fundamentally different storage
+    // structure and is preserved verbatim: both COLUMNSTORE variants, XML, SPATIAL, NONCLUSTERED HASH
+    // (memory-optimized), and JSON. Matching on exact equality rather than a substring test is what
+    // keeps 'NONCLUSTERED HASH' distinct from 'NONCLUSTERED' — a prefix/substring test would collapse
+    // a hash index onto a B-tree, silently colliding two unrelated index kinds.
+    private string EffectiveTypeDesc(string typeDesc)
+    {
+        if (!_options.Indexes.HasFlag(IndexNormalization.NormalizeClustering))
+            return typeDesc;
+        var isRowstoreBTree = typeDesc.Equals("CLUSTERED", StringComparison.OrdinalIgnoreCase) || typeDesc.Equals("NONCLUSTERED", StringComparison.OrdinalIgnoreCase);
+        return isRowstoreBTree ? "X-CLUSTERED" : typeDesc;
+    }
+
+    // Under IgnoreSortOrder the ASC/DESC direction of each key column is dropped; key column
+    // order itself is always significant and is never reordered.
+    private List<IndexKeyColumn> EffectiveKeyColumns(List<IndexKeyColumn> keyColumns)
+    {
+        return _options.Indexes.HasFlag(IndexNormalization.IgnoreSortOrder)
+            ? keyColumns.Select(k => k with { IsDescendingKey = false }).ToList()
+            : keyColumns;
+    }
+
+    private static void AppendKeyColumns(IncrementalHash hasher, List<IndexKeyColumn> keyColumns)
+    {
+        AppendInt(hasher, keyColumns.Count);
+        foreach (var k in keyColumns)
+        {
+            AppendString(hasher, k.Name);
+            AppendBool(hasher, k.IsDescendingKey);
+        }
+    }
+
+    // Ephemeral ordinal sort keys (used only to order elements deterministically, never hashed). The
+    // separators are low control characters unlikely to occur in identifiers; a sort-key collision
+    // would only perturb ordering, and two genuinely-equal element sets always sort identically anyway.
+    private const string SortFieldSep = "";
+    private const string SortItemSep = "";
+    private const string SortDescMarker = "";
+
+    // The sort key must cover every field HashIndexes hashes (same discipline as HashForeignKeys and
+    // HashCheckConstraints). Under Indexes.IgnoreNames — which the Structural preset sets — Name
+    // collapses to the empty sentinel for every index on an object, so two indexes sharing key columns,
+    // type, includes and filter tie on the remaining fields. OrderBy is a stable sort, so a tie falls
+    // back to extraction order (sys.indexes ORDER BY i.name), which would leak the very names the
+    // option just removed back into the hash and make two option-equivalent databases differ.
+    private static string IndexSortKey(IndexSchema index) =>
+        string.Join(SortFieldSep, KeyColumnsSortKey(index.KeyColumns), index.TypeDesc, index.Name, string.Join(SortItemSep, index.IncludedColumns), index.FilterDefinition ?? string.Empty, index.XmlSecondaryTypeDesc ?? string.Empty, index.XmlIndexTypeDescription ?? string.Empty, BoolSortKey(index.IsUnique), BoolSortKey(index.IsUniqueConstraint), BoolSortKey(index.IsPrimaryKey), BoolSortKey(index.IsDisabled), BoolSortKey(index.IgnoreDupKey), index.FillFactor.ToString("D3", CultureInfo.InvariantCulture), BoolSortKey(index.IsPadded), BoolSortKey(index.AllowRowLocks), BoolSortKey(index.AllowPageLocks));
+
+    private static string BoolSortKey(bool value) => value ? "1" : "0";
+
+    private static string KeyColumnsSortKey(List<IndexKeyColumn> keyColumns) =>
+        string.Join(SortItemSep, keyColumns.Select(k => k.IsDescendingKey ? k.Name + SortDescMarker : k.Name));
+
+    private static string ForeignKeyColumnPairsSortKey(List<ForeignKeyColumnPair> columnPairs) =>
+        string.Join(SortItemSep, columnPairs.Select(c => c.ParentColumn + SortFieldSep + c.ReferencedColumn));
+
+    /// <summary>
+    /// SQL Server system-generated constraint/index names: type prefix, double-underscore separators,
+    /// and an 8- or 16-hex-char suffix derived from the object id (e.g. 'PK__Employee__3214EC07A1B2C3D4',
+    /// 'DF__Tab__Col__8E1F2D3C').
+    /// </summary>
+    private static readonly Regex SystemGeneratedNameRegex = new(@"^(PK|UQ|FK|DF|CK)__.+__[0-9A-Fa-f]{8}([0-9A-Fa-f]{8})?$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Detects auto-generated index/constraint names: SQL Server system-generated names
+    /// (e.g. 'PK__Employee__3214EC07A1B2C3D4') and GUID-suffixed names
+    /// (e.g. 'nci_wi_Asset_EF8A0893C0DB8B0FC4AD9EABBE187744').
+    /// </summary>
+    internal static bool IsAutoGeneratedName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return false;
+
+        if (SystemGeneratedNameRegex.IsMatch(name))
+            return true;
+
+        if (name.Length < 12)
+            return false;
 
         var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 3)
-            return name;
+            return false;
 
         var lastPart = parts[^1];
         if (string.IsNullOrWhiteSpace(lastPart))
-            return name;
+            return false;
 
-        // Check if the last part looks like hexadecimal
-        if (!lastPart.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
-            return name;
+        // Auto-generated suffixes are long hex runs — at least 16 chars and a multiple of 8, e.g.
+        // half- or full-GUID suffixes on missing-index 'nci_wi_...' names. Requiring >= 16 avoids
+        // misclassifying ordinary names whose final segment is a short 8-char hex run
+        // (e.g. 'IX_Audit_Record_CAFEBABE'); SQL Server's own PK__/DF__ system names are matched by
+        // SystemGeneratedNameRegex above regardless of suffix length.
+        return lastPart.Length >= 16 && lastPart.Length % 8 == 0 && lastPart.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+    }
 
-        // Check if the last part has a multiple of 8 characters (typical GUID suffix)
-        if (lastPart.Length % 8 != 0)
-            return name;
+    /// <summary>
+    /// Matches SQL Server's auto-generated history table name for a system-versioned table created
+    /// without an explicit HISTORY_TABLE: 'MSSQL_TemporalHistoryFor_&lt;object_id&gt;' with an optional
+    /// '_&lt;n&gt;' disambiguator, optionally schema-qualified (e.g. 'dbo.MSSQL_TemporalHistoryFor_889838603').
+    /// </summary>
+    private static readonly Regex AutoGeneratedHistoryTableRegex = new(@"(^|\.)MSSQL_TemporalHistoryFor_[0-9]+(_[0-9]+)?$", RegexOptions.Compiled);
 
-        return string.Join('_', parts[..^1]);
+    /// <summary>
+    /// Matches SQL Server's auto-created clustered index on an anonymous temporal history table:
+    /// 'ix_MSSQL_TemporalHistoryFor_&lt;object_id&gt;' with the same optional '_&lt;n&gt;' disambiguator as
+    /// <see cref="AutoGeneratedHistoryTableRegex"/>.
+    /// </summary>
+    private static readonly Regex AutoGeneratedHistoryIndexRegex = new(@"^ix_MSSQL_TemporalHistoryFor_[0-9]+(_[0-9]+)?$", RegexOptions.Compiled);
+
+    // The auto-generated history table name embeds the parent table's object_id, which is not stable
+    // across databases, so it is normalized to the empty sentinel; an explicitly-named history table
+    // keeps its deterministic schema-qualified name. This normalizes the *linkage* recorded on the
+    // versioned parent (TableSchema.HistoryTableName); the history table's own identity is normalized
+    // separately by EffectiveTableName below.
+    private static string NormalizeHistoryTableName(string? historyTableName)
+    {
+        if (string.IsNullOrEmpty(historyTableName))
+            return string.Empty;
+        return AutoGeneratedHistoryTableRegex.IsMatch(historyTableName) ? string.Empty : historyTableName;
+    }
+
+    // An anonymous history table's own row (TemporalType "HISTORY_TABLE") carries the same
+    // object-id-derived name as the linkage NormalizeHistoryTableName collapses on the parent side.
+    // Rather than collapsing it to the same empty sentinel (which would make two anonymous history
+    // tables in one schema tie on sort order, and lose the parent association entirely), it is given a
+    // deterministic name derived from its versioned parent — unique per parent, and unaffected by
+    // renaming SYSTEM_VERSIONING onto a different table. An explicitly-named history table (or any
+    // ordinary table) is unaffected.
+    private static string EffectiveTableName(TableSchema table)
+    {
+        if (table.TemporalType != "HISTORY_TABLE" || table.VersionedParentSchema is null || table.VersionedParentName is null)
+            return table.Name;
+        return AutoGeneratedHistoryTableRegex.IsMatch(table.Name) ? $"MSSQL_TemporalHistoryFor_{table.VersionedParentSchema}.{table.VersionedParentName}" : table.Name;
+    }
+
+    // The auto-created clustered index on an anonymous history table shares the same object-id
+    // artifact as the table's own name; this produces a rewrite hook (for HashIndexes) that substitutes
+    // the same parent-derived identity, or null when the table doesn't qualify (ordinary table, or a
+    // history table with an explicit name — its indexes are real, user-controlled schema).
+    private static Func<string, string>? HistoryIndexNameRewrite(TableSchema table)
+    {
+        if (table.TemporalType != "HISTORY_TABLE" || table.VersionedParentSchema is null || table.VersionedParentName is null)
+            return null;
+        if (!AutoGeneratedHistoryTableRegex.IsMatch(table.Name))
+            return null;
+
+        var effectiveIndexName = $"ix_MSSQL_TemporalHistoryFor_{table.VersionedParentSchema}.{table.VersionedParentName}";
+        return name => AutoGeneratedHistoryIndexRegex.IsMatch(name) ? effectiveIndexName : name;
     }
 
     private static void AppendString(IncrementalHash hasher, string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
-        // Prefix with length to avoid collisions like "AB" + "C" vs "A" + "BC"
-        hasher.AppendData(BitConverter.GetBytes(bytes.Length));
+        // Prefix with length to avoid collisions like "AB" + "C" vs "A" + "BC".
+        // Write little-endian explicitly so the hash is independent of host byte order.
+        Span<byte> lengthPrefix = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, bytes.Length);
+        hasher.AppendData(lengthPrefix);
         hasher.AppendData(bytes);
     }
 
     private static void AppendInt(IncrementalHash hasher, int value)
     {
-        hasher.AppendData(BitConverter.GetBytes(value));
+        // Little-endian explicitly so the hash is independent of host byte order.
+        Span<byte> buffer = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(buffer, value);
+        hasher.AppendData(buffer);
     }
 
     private static void AppendBool(IncrementalHash hasher, bool value)

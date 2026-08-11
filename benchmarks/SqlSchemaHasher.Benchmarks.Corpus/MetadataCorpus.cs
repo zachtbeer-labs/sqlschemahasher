@@ -1,0 +1,270 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using zachtbeer.SqlSchemaHasher;
+
+namespace SqlSchemaHasher.Benchmarks.Corpus;
+
+/// <summary>
+/// Renders a <see cref="SchemaProfile"/> into an in-memory <see cref="SchemaMetadata"/> graph for the
+/// calculator benchmark tier. Generation is a pure function of loop indices — no randomness, no clock,
+/// no environment — so the same profile always yields a byte-identical hash.
+/// </summary>
+public static class MetadataCorpus
+{
+    private static readonly string[] DataTypes = ["int", "bigint", "nvarchar", "decimal", "bit", "datetime2", "uniqueidentifier", "varbinary"];
+
+    /// <summary>An empty schema. Used as the base for single-object-kind projections.</summary>
+    public static SchemaMetadata Empty => new(new List<TableSchema>(), new List<StoredProcedureSchema>(), new List<UserDefinedTableTypeSchema>(), new List<ViewSchema>(), new List<FunctionSchema>(), new List<TriggerSchema>(), new List<SequenceSchema>(), new List<SynonymSchema>(), new List<ExtendedPropertySchema>());
+
+    /// <summary>Builds the full synthetic schema described by <paramref name="profile"/>.</summary>
+    public static SchemaMetadata Build(SchemaProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var tables = BuildTables(profile);
+        var procedures = BuildStoredProcedures(profile);
+        var tableTypes = BuildTableTypes(profile);
+        var views = BuildViews(profile);
+        var functions = BuildFunctions(profile);
+        var triggers = BuildTriggers(profile);
+        var sequences = BuildSequences(profile);
+        var synonyms = BuildSynonyms(profile);
+        var extendedProperties = BuildExtendedProperties(profile);
+
+        return new SchemaMetadata(tables, procedures, tableTypes, views, functions, triggers, sequences, synonyms, extendedProperties);
+    }
+
+    /// <summary>Tables only — isolates the table, column, index and constraint hashing paths.</summary>
+    public static SchemaMetadata OnlyTables(SchemaMetadata schema) => Empty with { Tables = schema.Tables };
+
+    /// <summary>Programmable modules only — stored procedures, views, functions and triggers.</summary>
+    public static SchemaMetadata OnlyModules(SchemaMetadata schema) => Empty with { StoredProcedures = schema.StoredProcedures, Views = schema.Views, Functions = schema.Functions, Triggers = schema.Triggers };
+
+    /// <summary>User-defined table types only.</summary>
+    public static SchemaMetadata OnlyTableTypes(SchemaMetadata schema) => Empty with { UserDefinedTableTypes = schema.UserDefinedTableTypes };
+
+    /// <summary>Extended properties only.</summary>
+    public static SchemaMetadata OnlyExtendedProperties(SchemaMetadata schema) => Empty with { ExtendedProperties = schema.ExtendedProperties };
+
+    /// <summary>Sequences and synonyms only, grouped since each kind alone is too small a corpus slice to measure meaningfully.</summary>
+    public static SchemaMetadata OnlySequencesAndSynonyms(SchemaMetadata schema) => Empty with { Sequences = schema.Sequences, Synonyms = schema.Synonyms };
+
+    private static string SchemaFor(int index) => CorpusSchemas.For(index);
+
+    // The corpus's one job is byte-identical output across machines and runs, so its number formatting
+    // is pinned explicitly here rather than inherited from whatever culture happens to be active in the
+    // process running the benchmark.
+    private static string Inv(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// A deterministic stand-in for the server-side <c>HASHBYTES('SHA2_256', ...)</c> module hash:
+    /// 64 lowercase hex characters, stable for a given seed.
+    /// </summary>
+    private static string DefinitionHash(string seed) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(seed)));
+
+    private static List<ColumnSchema> BuildColumns(SchemaProfile profile, string owner)
+    {
+        var columns = new List<ColumnSchema>(profile.ColumnsPerTable);
+        for (var i = 0; i < profile.ColumnsPerTable; i++)
+        {
+            var dataType = DataTypes[i % DataTypes.Length];
+            var isComputed = i > 0 && i % 7 == 0;
+            var computedDefinition = isComputed ? $"([Col{Inv(i - 1)}]+(1))" : null;
+            columns.Add(new ColumnSchema($"Col{Inv(i)}", dataType, MaxLength: 8 * (i % 16 + 1), Precision: 18, Scale: i % 4, IsNullable: i % 3 != 0, IsComputed: isComputed, ComputedDefinition: computedDefinition, IsPersisted: isComputed, CollationName: dataType == "nvarchar" ? "SQL_Latin1_General_CP1_CI_AS" : null, ColumnId: i + 1));
+        }
+
+        // Guarantees the owner participates in the hashed value, so two same-shaped tables differ.
+        columns[0] = columns[0] with { Name = $"{owner}Id" };
+        return columns;
+    }
+
+    /// <summary>
+    /// The name of the column at <paramref name="ordinal"/> as <see cref="BuildColumns"/> renders it:
+    /// column 0 is <paramref name="identityColumnName"/> when the caller has one (tables), since
+    /// <see cref="BuildColumns"/> renames that slot from <c>Col0</c> to <c>&lt;owner&gt;Id</c>; every
+    /// other ordinal, and column 0 for callers with no column list of their own (indexed views), is
+    /// the plain <c>Col&lt;ordinal&gt;</c> name.
+    /// </summary>
+    private static string ColumnNameAt(int ordinal, string? identityColumnName) => ordinal == 0 && identityColumnName is not null ? identityColumnName : $"Col{Inv(ordinal)}";
+
+    private static List<IndexSchema> BuildIndexes(SchemaProfile profile, string tableName, string? identityColumnName, int ownerIndex)
+    {
+        var indexes = new List<IndexSchema>(profile.IndexesPerTable);
+        for (var i = 0; i < profile.IndexesPerTable; i++)
+        {
+            var keyColumnName = ColumnNameAt(i % profile.ColumnsPerTable, identityColumnName);
+            var includedColumnName = ColumnNameAt((i + 1) % profile.ColumnsPerTable, identityColumnName);
+            var keyColumns = new List<IndexKeyColumn> { new(keyColumnName, IsDescendingKey: i % 2 == 1) };
+            var includedColumns = new List<string> { includedColumnName };
+            var typeDesc = i == 0 ? "CLUSTERED" : "NONCLUSTERED";
+            // "Every 5th index is filtered" needs a counter across every index a profile produces, not
+            // just this owner's own IndexesPerTable: IndexesPerTable alone tops out at 4 (Large), so a
+            // per-owner i % 5 == 4 check would never fire in any shipped profile.
+            var globalOrdinal = (ownerIndex * profile.IndexesPerTable) + i;
+            indexes.Add(new IndexSchema($"IX_{tableName}_{Inv(i)}", typeDesc, IsUnique: i == 0, IsUniqueConstraint: false, IsPrimaryKey: i == 0, IsDisabled: false, IgnoreDupKey: false, keyColumns, includedColumns, FilterDefinition: globalOrdinal % 5 == 4 ? $"([{keyColumnName}] IS NOT NULL)" : null, FillFactor: (byte)(i % 2 == 0 ? 0 : 90)));
+        }
+
+        return indexes;
+    }
+
+    private static List<TableSchema> BuildTables(SchemaProfile profile)
+    {
+        var tables = new List<TableSchema>(profile.Tables);
+        for (var i = 0; i < profile.Tables; i++)
+        {
+            var name = $"Table{Inv(i)}";
+            var schemaName = SchemaFor(i);
+            var columns = BuildColumns(profile, name);
+            var indexes = BuildIndexes(profile, name, $"{name}Id", i);
+            var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY KEY", $"PK_{name}", IsSystemNamed: false, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
+            var foreignKeys = BuildForeignKeys(profile, i, name);
+            var checkConstraints = new List<CheckConstraintSchema> { new($"CK_{name}", "([Col1]>(0))", IsDisabled: false, IsNotTrusted: false) };
+            var defaultConstraints = new List<DefaultConstraintSchema> { new($"DF_{name}_Col1", "Col1", "((0))") };
+            tables.Add(new TableSchema(schemaName, name, columns, indexes, keyConstraints, foreignKeys, checkConstraints, defaultConstraints, IdentityColumn: $"{name}Id", IdentitySeed: "1", IdentityIncrement: "1"));
+        }
+
+        return tables;
+    }
+
+    private static List<ForeignKeyConstraintSchema> BuildForeignKeys(SchemaProfile profile, int tableIndex, string tableName)
+    {
+        // Table 0 has no parent to reference, so it carries no foreign keys.
+        var foreignKeys = new List<ForeignKeyConstraintSchema>();
+        for (var i = 0; i < profile.ForeignKeysPerTable && tableIndex > 0; i++)
+        {
+            var referencedIndex = (tableIndex - 1 - i + profile.Tables) % profile.Tables;
+            var columnPairs = new List<ForeignKeyColumnPair> { new($"Col{Inv(i + 1)}", $"Table{Inv(referencedIndex)}Id") };
+            foreignKeys.Add(new ForeignKeyConstraintSchema($"FK_{tableName}_{Inv(referencedIndex)}", SchemaFor(referencedIndex), $"Table{Inv(referencedIndex)}", columnPairs, DeleteAction: "NO_ACTION", UpdateAction: "NO_ACTION", IsDisabled: false, IsNotTrusted: false));
+        }
+
+        return foreignKeys;
+    }
+
+    private static List<ParameterSchema> BuildParameters(SchemaProfile profile)
+    {
+        var parameters = new List<ParameterSchema>(profile.ParametersPerModule);
+        for (var i = 0; i < profile.ParametersPerModule; i++)
+        {
+            parameters.Add(new ParameterSchema($"@p{Inv(i)}", DataTypes[i % DataTypes.Length], MaxLength: 8 * (i % 8 + 1), Precision: 18, Scale: i % 4, IsNullable: true, IsOutput: i % 4 == 3));
+        }
+
+        return parameters;
+    }
+
+    private static List<StoredProcedureSchema> BuildStoredProcedures(SchemaProfile profile)
+    {
+        var procedures = new List<StoredProcedureSchema>(profile.StoredProcedures);
+        for (var i = 0; i < profile.StoredProcedures; i++)
+        {
+            var name = $"usp_Proc{Inv(i)}";
+            procedures.Add(new StoredProcedureSchema(SchemaFor(i), name, BuildParameters(profile), DefinitionHash($"proc:{name}")));
+        }
+
+        return procedures;
+    }
+
+    private static List<UserDefinedTableTypeSchema> BuildTableTypes(SchemaProfile profile)
+    {
+        var tableTypes = new List<UserDefinedTableTypeSchema>(profile.TableTypes);
+        for (var i = 0; i < profile.TableTypes; i++)
+        {
+            var name = $"Type{Inv(i)}";
+            var keyConstraints = new List<KeyConstraintSchema> { new("PRIMARY KEY", $"PK_{name}", IsSystemNamed: true, new List<IndexKeyColumn> { new($"{name}Id", IsDescendingKey: false) }) };
+            tableTypes.Add(new UserDefinedTableTypeSchema(SchemaFor(i), name, BuildColumns(profile, name), new List<IndexSchema>(), keyConstraints, new List<CheckConstraintSchema>(), new List<DefaultConstraintSchema>()));
+        }
+
+        return tableTypes;
+    }
+
+    private static List<ViewSchema> BuildViews(SchemaProfile profile)
+    {
+        var views = new List<ViewSchema>(profile.Views);
+        for (var i = 0; i < profile.Views; i++)
+        {
+            var name = $"vw_View{Inv(i)}";
+            // Every fifth view is indexed, mirroring the indexed-view path in the calculator. A view
+            // carries no column list of its own (see ViewSchema's <summary>), so there is no owner
+            // identity column for BuildIndexes to agree with.
+            var indexes = i % 5 == 0 ? BuildIndexes(profile, name, null, i) : new List<IndexSchema>();
+            views.Add(new ViewSchema(SchemaFor(i), name, indexes, DefinitionHash($"view:{name}")));
+        }
+
+        return views;
+    }
+
+    private static List<FunctionSchema> BuildFunctions(SchemaProfile profile)
+    {
+        var typeDescs = new[] { "SQL_SCALAR_FUNCTION", "SQL_INLINE_TABLE_VALUED_FUNCTION", "SQL_TABLE_VALUED_FUNCTION" };
+        var functions = new List<FunctionSchema>(profile.Functions);
+        for (var i = 0; i < profile.Functions; i++)
+        {
+            var name = $"fn_Function{Inv(i)}";
+            var typeDesc = typeDescs[i % typeDescs.Length];
+            var parameters = BuildParameters(profile);
+            // A scalar function's return type is the parameter_id = 0 row.
+            if (typeDesc == "SQL_SCALAR_FUNCTION")
+            {
+                parameters.Insert(0, new ParameterSchema(string.Empty, "int", MaxLength: 4, Precision: 10, Scale: 0, IsNullable: true));
+            }
+
+            functions.Add(new FunctionSchema(SchemaFor(i), name, typeDesc, parameters, DefinitionHash($"function:{name}")));
+        }
+
+        return functions;
+    }
+
+    private static List<TriggerSchema> BuildTriggers(SchemaProfile profile)
+    {
+        var eventTypes = new[] { "INSERT", "UPDATE", "DELETE" };
+        var triggers = new List<TriggerSchema>(profile.Triggers);
+        for (var i = 0; i < profile.Triggers; i++)
+        {
+            var name = $"tr_Trigger{Inv(i)}";
+            var parentIndex = i % Math.Max(profile.Tables, 1);
+            var events = new List<TriggerEventSchema> { new(eventTypes[i % eventTypes.Length], IsFirst: i % 3 == 0, IsLast: false) };
+            triggers.Add(new TriggerSchema(SchemaFor(i), name, SchemaFor(parentIndex), $"Table{Inv(parentIndex)}", IsDisabled: i % 11 == 0, IsInsteadOfTrigger: i % 7 == 0, IsNotForReplication: false, events, DefinitionHash($"trigger:{name}")));
+        }
+
+        return triggers;
+    }
+
+    private static List<SequenceSchema> BuildSequences(SchemaProfile profile)
+    {
+        var sequences = new List<SequenceSchema>(profile.Sequences);
+        for (var i = 0; i < profile.Sequences; i++)
+        {
+            sequences.Add(new SequenceSchema(SchemaFor(i), $"seq_Sequence{Inv(i)}", "bigint", Precision: 19, StartValue: "1", Increment: "1", MinimumValue: "-9223372036854775808", MaximumValue: "9223372036854775807", IsCycling: i % 2 == 0, IsCached: true, CacheSize: 50));
+        }
+
+        return sequences;
+    }
+
+    private static List<SynonymSchema> BuildSynonyms(SchemaProfile profile)
+    {
+        var synonyms = new List<SynonymSchema>(profile.Synonyms);
+        for (var i = 0; i < profile.Synonyms; i++)
+        {
+            var targetIndex = i % Math.Max(profile.Tables, 1);
+            synonyms.Add(new SynonymSchema(SchemaFor(i), $"syn_Synonym{Inv(i)}", $"[{SchemaFor(targetIndex)}].[Table{Inv(targetIndex)}]"));
+        }
+
+        return synonyms;
+    }
+
+    private static List<ExtendedPropertySchema> BuildExtendedProperties(SchemaProfile profile)
+    {
+        var properties = new List<ExtendedPropertySchema>(profile.ExtendedProperties);
+        for (var i = 0; i < profile.ExtendedProperties; i++)
+        {
+            var targetIndex = i % Math.Max(profile.Tables, 1);
+            var targetTableName = $"Table{Inv(targetIndex)}";
+            // Alternate object-scoped and column-scoped properties to exercise both resolution paths.
+            // ColumnNameAt keeps the named column real: BuildColumns renames ordinal 0 to "{owner}Id".
+            var subObjectName = i % 2 == 0 ? null : ColumnNameAt(i % profile.ColumnsPerTable, $"{targetTableName}Id");
+            properties.Add(new ExtendedPropertySchema("OBJECT_OR_COLUMN", SchemaFor(targetIndex), targetTableName, subObjectName, "MS_Description", "nvarchar", $"Synthetic description {Inv(i)}"));
+        }
+
+        return properties;
+    }
+}

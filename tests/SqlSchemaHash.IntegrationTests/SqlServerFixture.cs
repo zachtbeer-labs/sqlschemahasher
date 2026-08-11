@@ -15,8 +15,7 @@ public class SqlServerFixture
     {
         var image = Environment.GetEnvironmentVariable("SQLSERVER_IMAGE") ?? "mcr.microsoft.com/mssql/server:2025-latest";
 
-        _container = new MsSqlBuilder()
-            .WithImage(image)
+        _container = new MsSqlBuilder(image)
             .WithPassword("DeepDishD@tabas3!")
             .Build();
 

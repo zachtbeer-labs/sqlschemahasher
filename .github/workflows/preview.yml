@@ -44,9 +44,9 @@ jobs:
         id: version
         run: echo "version=${{ inputs.base_version }}-${{ inputs.preview_label }}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-      - run: dotnet restore SqlSchemaHasher.sln --locked-mode
-      - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
-      - run: dotnet test SqlSchemaHasher.sln -c Release --no-build --verbosity normal
+      - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
+      - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
+      - run: dotnet test SqlSchemaHasher.slnx -c Release --no-build --verbosity normal
 
       - name: Pack
         run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./preview-packages /p:Version=${{ steps.version.outputs.version }}

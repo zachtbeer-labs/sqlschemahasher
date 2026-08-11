@@ -1,0 +1,16 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/SqlSchemaHasher.Benchmarks.Corpus/SqlSchemaHasher.Benchmarks.Corpus.csproj" />
+    <Project Path="benchmarks/SqlSchemaHasher.Benchmarks/SqlSchemaHasher.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlSchemaHash.IntegrationTests/SqlSchemaHash.IntegrationTests.csproj" />
+    <Project Path="tests/SqlSchemaHash.UnitTests/SqlSchemaHash.UnitTests.csproj" />
+  </Folder>
+  <Project Path="src/zachtbeer.SqlSchemaHasher.csproj" />
+</Solution>

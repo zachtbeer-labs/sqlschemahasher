@@ -5,16 +5,17 @@
 
     <!-- NuGet Package Metadata -->
     <PackageId>zachtbeer.SqlSchemaHasher</PackageId>
-    <Version>1.0.0</Version>
+    <Version>2.0.0</Version>
     <Authors>Zachtbeer Labs B.V.</Authors>
     <Company>Zachtbeer Labs B.V.</Company>
-    <Description>Deterministic SHA256 hashing for SQL Server database schemas. Extract and hash table definitions, stored procedures, and user-defined types for schema comparison and change detection.</Description>
+    <Description>Deterministic SHA256 hashing for SQL Server database schemas. Extract and hash tables, stored procedures, user-defined table types, views, functions, triggers, sequences, synonyms, and extended properties for schema comparison and change detection.</Description>
     <PackageTags>sqlserver;schema;hash;database;migration;dacpac;schema-drift;change-detection</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/zachtbeer-labs/sqlschemahasher</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/zachtbeer-labs/sqlschemahasher</PackageProjectUrl>
+    <PackageProjectUrl>https://zachtbeer-labs.github.io/sqlschemahasher/</PackageProjectUrl>
     <Copyright>Copyright (c) 2026 Zachtbeer Labs B.V.</Copyright>
     <PackageReleaseNotes>https://github.com/zachtbeer-labs/sqlschemahasher/releases</PackageReleaseNotes>
 
@@ -24,10 +25,16 @@
 
   <ItemGroup>
     <None Include="../README.md" Pack="true" PackagePath="/" />
+    <None Include="../icon.png" Pack="true" PackagePath="/" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Dapper" Version="2.1.66" />
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.2" />
+    <InternalsVisibleTo Include="SqlSchemaHash.IntegrationTests" />
+    <InternalsVisibleTo Include="SqlSchemaHash.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
   </ItemGroup>
 </Project>

@@ -28,9 +28,20 @@ jobs:
         key: nuget-${{ hashFiles('**/packages.lock.json') }}
         restore-keys: nuget-
 
-    - run: dotnet restore SqlSchemaHasher.sln --locked-mode
-    - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
-    - run: dotnet test SqlSchemaHasher.sln -c Release --no-build --verbosity normal
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
+    - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
+    - run: dotnet test tests/SqlSchemaHash.UnitTests/SqlSchemaHash.UnitTests.csproj -c Release --no-build --verbosity normal
+
+    # Executes each no-database benchmark exactly once with no statistics, so a benchmark that
+    # throws is caught at PR time. This is a compile-and-run check, NOT a performance gate: it must
+    # never fail on a slow result. The integration tier is excluded — it needs a SQL Server.
+    # --artifacts redirects output away from the committed benchmarks/results/<version> baseline
+    # (BenchmarkConfig.Create pins that path by default): CLI arguments override config, and without
+    # this a maintainer copy-pasting this command locally to reproduce a CI failure would silently
+    # overwrite the published baseline with single-iteration Dry-job results.
+    - name: Benchmark smoke run
+      run: dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release --no-build -- --job Dry --filter '*CalculatorBenchmarks*' '*ObjectKindBenchmarks*' --artifacts /tmp/benchmark-smoke-artifacts
+
     - run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./artifacts
 
   integration:
@@ -56,9 +67,9 @@ jobs:
         key: nuget-${{ hashFiles('**/packages.lock.json') }}
         restore-keys: nuget-
 
-    - run: dotnet restore SqlSchemaHasher.sln --locked-mode
-    - run: dotnet build SqlSchemaHasher.sln -c Release --no-restore
-    - run: dotnet test SqlSchemaHasher.sln -c Release --no-build --verbosity normal
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
+    - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
+    - run: dotnet test SqlSchemaHasher.slnx -c Release --no-build --verbosity normal
 
   security-scan:
     runs-on: ubuntu-latest
@@ -71,11 +82,11 @@ jobs:
           9.0.x
           10.0.x
 
-    - run: dotnet restore SqlSchemaHasher.sln --locked-mode
+    - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
 
     - name: Check for vulnerable packages
       run: |
-        dotnet list SqlSchemaHasher.sln package --vulnerable --include-transitive | tee vulnerable.txt
+        dotnet list SqlSchemaHasher.slnx package --vulnerable --include-transitive | tee vulnerable.txt
         if grep -q "has the following vulnerable packages" vulnerable.txt; then
           echo "Vulnerable packages found."
           exit 1

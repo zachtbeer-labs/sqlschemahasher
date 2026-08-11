@@ -15,16 +15,65 @@ Use [GitHub Issues](https://github.com/zachtbeer-labs/sqlschemahasher/issues). F
 
 ### Prerequisites
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download)
+- [.NET SDK](https://dotnet.microsoft.com/download) matching the version pinned in `global.json` (the library multi-targets `net6.0` through `net10.0`; building the `net10.0` target requires a 10.0.x SDK)
 - [Docker](https://www.docker.com/) (for integration tests -- Testcontainers spins up SQL Server 2025)
+- [SQL Server LocalDB](https://learn.microsoft.com/sql/database-engine/configure-windows/sql-server-express-localdb) (benchmarks only -- the integration benchmark tier defaults to LocalDB; see Benchmarks below)
 
 ### Build and Test
 
 ```bash
-dotnet build SqlSchemaHasher.sln
-dotnet test SqlSchemaHasher.sln
+dotnet build SqlSchemaHasher.slnx
 dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 ```
+
+Tests are split into two projects:
+
+- **Unit tests** (`tests/SqlSchemaHash.UnitTests`) — fast, no database required:
+  ```bash
+  dotnet test tests/SqlSchemaHash.UnitTests
+  ```
+- **Integration tests** (`tests/SqlSchemaHash.IntegrationTests`) — require Docker (Testcontainers spins up SQL Server):
+  ```bash
+  dotnet test tests/SqlSchemaHash.IntegrationTests
+  ```
+
+`dotnet test SqlSchemaHasher.slnx` runs both.
+
+### Dependencies
+
+This repo uses [Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management). NuGet versions live in `Directory.Packages.props` at the repo root: project files reference packages without a `Version` attribute. To add or bump a dependency, add or edit its `<PackageVersion>` entry there, then regenerate the lock files with `dotnet restore SqlSchemaHasher.slnx --force-evaluate` and commit them alongside the change (CI restores with `--locked-mode`).
+
+### Benchmarks
+
+Performance benchmarks live in `benchmarks/` and are run by hand — there is no CI performance gate,
+because shared runners vary too much between runs for a threshold to be meaningful. Committed
+results under `benchmarks/results/<version>/` are the baseline; comparing releases is a `git diff`.
+
+**Calculator tier** — hashes synthetic in-memory schemas. No database, a few minutes to run. Use it
+before and after any change to `SchemaHashCalculator`:
+
+```bash
+dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release
+```
+
+**Integration tier** — end-to-end extraction and hashing against a real database, seeded from
+generated DDL. Uses SQL Server LocalDB by default, so no Docker is needed. Run it at major and minor
+releases to refresh the published characterization table:
+
+```bash
+dotnet run --project benchmarks/SqlSchemaHasher.Benchmarks -c Release -- --anyCategories Integration
+```
+
+**The LocalDB default only works on Windows** — SQL Server LocalDB has no Linux or macOS build. On
+those platforms, set `SQLSCHEMAHASHER_BENCHMARK_CONNECTIONSTRING` to point at any reachable SQL
+Server instead — a Docker container works fine here, even though the tier itself needs no Docker on
+Windows. On Windows, set the same variable to measure against a different server. LocalDB excludes
+network latency, which makes it a cleaner regression signal but understates what a networked
+deployment sees.
+
+Close other applications before a run whose results you intend to commit, and note that numbers are
+only comparable across runs on the same machine — BenchmarkDotNet records the host environment in
+every export for that reason.
 
 ## Pull Request Guidelines
 
@@ -32,6 +81,16 @@ dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release
 2. Describe what you changed and why.
 3. Include tests for new or changed behavior.
 4. Make sure CI passes before requesting review.
+
+## Releasing
+
+Releases are manual (no MinVer or tag-driven versioning):
+
+1. Bump `<Version>` in `src/zachtbeer.SqlSchemaHasher.csproj`.
+2. Update `CHANGELOG.md`: set the release date on the version's heading (replacing "Unreleased") and confirm its comparison link at the bottom is correct.
+3. Merge to `main`.
+4. Run the `release.yml` workflow via `workflow_dispatch`, passing the matching version (e.g. `2.0.0`).
+5. Verify the NuGet listing, the SLSA provenance attestation, and the GitHub release it produces.
 
 ## Code Style
 
