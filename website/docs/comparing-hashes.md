@@ -8,7 +8,7 @@ sidebar_position: 6
 
 Every hash is returned as a **versioned envelope**: `<version>:<base64hash>`, e.g. `2:dGhpcyBpc...`.
 
-- **`version`** — the library's major version. The hash output is stable within a major version and may change across majors (as extraction fidelity improves). This lets you tell a real schema change apart from a library upgrade.
+- **`version`** — the hash-format version, currently `2`. The hash output is stable within a hash-format version and changes only when the hash contract does (in practice at a major release, as extraction fidelity improves). This lets you tell a real schema change apart from a library upgrade.
 - **`hash`** — the base64 SHA256 of the schema.
 
 The base64 alphabet contains no `:`, so the envelope parses unambiguously.

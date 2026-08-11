@@ -1,10 +1,9 @@
 name: Release
+# Pushing the tag is the release. MinVer derives every version number in the build from it,
+# so there is no version input to keep in sync.
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (e.g. 1.0.0)'
-        required: true
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -20,6 +19,25 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+
+      # Fails fast, before the ~minutes-long build, on the classic mistake of tagging a
+      # release whose CHANGELOG entry was never written or never dated. Prerelease tags are
+      # exempt — the changelog tracks releases, not the previews leading up to one.
+      - name: Verify CHANGELOG entry
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            echo "Prerelease ${version}: skipping CHANGELOG check."
+            exit 0
+          fi
+          heading=$(grep -m1 "^## \[${version}\]" CHANGELOG.md) || {
+            echo "CHANGELOG.md has no '## [${version}]' heading."
+            exit 1
+          }
+          if grep -qi 'unreleased' <<< "$heading"; then
+            echo "CHANGELOG.md still marks ${version} as unreleased: ${heading}"
+            exit 1
+          fi
 
       - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
         with:
@@ -37,8 +55,9 @@ jobs:
       - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
       - run: dotnet test SqlSchemaHasher.slnx -c Release --no-build --verbosity normal
 
+      # No version argument: MinVer stamped the tag's version at build time and --no-build keeps it.
       - name: Pack
-        run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./artifacts /p:Version=${{ inputs.version }}
+        run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./artifacts
 
       # Attest before pushing: nuget.org adds a repository signature that changes
       # the package bytes, which would invalidate an attestation made afterwards.
@@ -79,10 +98,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ inputs.version }}" \
+          gh release create "${{ github.ref_name }}" \
             ./artifacts/*.nupkg \
             ./artifacts/*.snupkg \
             ./artifacts/provenance.intoto.jsonl \
             ./artifacts/bom.json \
-            -t "v${{ inputs.version }}" \
+            -t "${{ github.ref_name }}" \
             --generate-notes

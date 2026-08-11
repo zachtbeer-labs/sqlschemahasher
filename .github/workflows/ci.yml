@@ -53,7 +53,10 @@ jobs:
     env:
       SQLSERVER_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.sqlserver }}
     steps:
+    # fetch-depth: 0 for MinVer — it needs full history and tags to compute the version.
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      with:
+        fetch-depth: 0
 
     - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
       with:
@@ -74,7 +77,10 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     steps:
+    # fetch-depth: 0 for MinVer — it needs full history and tags to compute the version.
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      with:
+        fetch-depth: 0
 
     - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
       with:

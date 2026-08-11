@@ -24,7 +24,7 @@ CHECK constraint, DEFAULT constraint, computed-column, and filtered-index defini
 
 ## Why is the hash an envelope (`2:<base64>`) instead of a bare hash?
 
-So a genuine schema change can be told apart from a library upgrade that changed *how* schemas are hashed. The `<version>` in `<version>:<base64hash>` is the library's hash-format version (currently tied to the major version); it lets `SchemaHashResult.Compare` return `Incomparable` when two hashes come from different hash-format versions, instead of a version-2 extraction fix silently masquerading as a schema change against a version-1 hash. Legacy bare-base64 hashes (produced before envelopes existed) fail to parse and also read as `Incomparable`, rather than being silently compared byte-for-byte against a value computed under a completely different hash contract.
+So a genuine schema change can be told apart from a library upgrade that changed *how* schemas are hashed. The `<version>` in `<version>:<base64hash>` is the hash-format version, currently `2` (bumped only when the hash contract changes, in practice at a major release); it lets `SchemaHashResult.Compare` return `Incomparable` when two hashes come from different hash-format versions, instead of a version-2 extraction fix silently masquerading as a schema change against a version-1 hash. Legacy bare-base64 hashes (produced before envelopes existed) fail to parse and also read as `Incomparable`, rather than being silently compared byte-for-byte against a value computed under a completely different hash contract.
 
 ## Why does a sequence's current value not affect the hash?
 

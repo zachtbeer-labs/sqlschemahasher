@@ -5,7 +5,6 @@
 
     <!-- NuGet Package Metadata -->
     <PackageId>zachtbeer.SqlSchemaHasher</PackageId>
-    <Version>2.0.0</Version>
     <Authors>Zachtbeer Labs B.V.</Authors>
     <Company>Zachtbeer Labs B.V.</Company>
     <Description>Deterministic SHA256 hashing for SQL Server database schemas. Extract and hash tables, stored procedures, user-defined table types, views, functions, triggers, sequences, synonyms, and extended properties for schema comparison and change detection.</Description>

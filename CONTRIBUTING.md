@@ -48,6 +48,9 @@ This repo uses [Central Package Management](https://learn.microsoft.com/nuget/co
 Performance benchmarks live in `benchmarks/` and are run by hand — there is no CI performance gate,
 because shared runners vary too much between runs for a threshold to be meaningful. Committed
 results under `benchmarks/results/<version>/` are the baseline; comparing releases is a `git diff`.
+The `<version>` folder is the MinVer version of the build, so refresh a baseline from a tagged
+commit — an untagged run lands in a prerelease folder (`2.0.1-alpha.0.7/`) rather than overwriting
+a release's committed numbers.
 
 **Calculator tier** — hashes synthetic in-memory schemas. No database, a few minutes to run. Use it
 before and after any change to `SchemaHashCalculator`:
@@ -82,15 +85,22 @@ every export for that reason.
 3. Include tests for new or changed behavior.
 4. Make sure CI passes before requesting review.
 
+## Versioning
+
+Versions come from git tags via [MinVer](https://github.com/adamralph/minver) — no `<Version>` lives in any project file. A tagged commit builds as that version (`v99.0.0` → `99.0.0`); an untagged commit builds as a height-based prerelease off the last tag (`2.0.1-alpha.0.7`). Because MinVer reads the repository, a build needs full history and tags: CI checks out with `fetch-depth: 0`, and a shallow local clone will produce the wrong number.
+
+The hash-format version in the `<version>:<base64hash>` envelope is deliberately *not* derived from this. It is the `HashFormatVersion` constant in `src/SqlSchemaHash.cs`, bumped by hand only when the hash contract changes — a public data contract must not be able to move because of how a build was cloned.
+
 ## Releasing
 
-Releases are manual (no MinVer or tag-driven versioning):
+The tag is the release: pushing it triggers `release.yml`, which builds, packs, publishes to NuGet, and creates the GitHub release.
 
-1. Bump `<Version>` in `src/zachtbeer.SqlSchemaHasher.csproj`.
-2. Update `CHANGELOG.md`: set the release date on the version's heading (replacing "Unreleased") and confirm its comparison link at the bottom is correct.
-3. Merge to `main`.
-4. Run the `release.yml` workflow via `workflow_dispatch`, passing the matching version (e.g. `2.0.0`).
-5. Verify the NuGet listing, the SLSA provenance attestation, and the GitHub release it produces.
+```bash
+git tag v99.0.0
+git push origin v99.0.0
+```
+
+See **[RELEASING.md](RELEASING.md)** for the full walkthrough — picking the version number, the `CHANGELOG.md` step the workflow enforces, publishing a preview package, and what to do when something goes wrong.
 
 ## Code Style
 

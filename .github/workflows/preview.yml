@@ -1,14 +1,8 @@
 name: Preview
+# No inputs: MinVer versions an untagged commit as a height-based prerelease off the last tag
+# (e.g. 2.0.1-alpha.0.7), which is already unique per commit.
 on:
   workflow_dispatch:
-    inputs:
-      base_version:
-        description: 'Base version for the preview (e.g. 1.1.0)'
-        required: true
-      preview_label:
-        description: 'Prerelease label'
-        required: false
-        default: 'preview'
 
 concurrency:
   group: preview-publish
@@ -23,6 +17,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # Job-level so it reaches the build, where MinVer stamps the assembly (pack runs --no-build).
+    # nuget.org ignores build metadata, so this is assembly-level traceability only.
+    env:
+      MinVerBuildMetadata: ci.${{ github.run_number }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -40,16 +38,16 @@ jobs:
           key: nuget-${{ hashFiles('**/packages.lock.json') }}
           restore-keys: nuget-
 
-      - name: Compute preview version
-        id: version
-        run: echo "version=${{ inputs.base_version }}-${{ inputs.preview_label }}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-
       - run: dotnet restore SqlSchemaHasher.slnx --locked-mode
       - run: dotnet build SqlSchemaHasher.slnx -c Release --no-restore
       - run: dotnet test SqlSchemaHasher.slnx -c Release --no-build --verbosity normal
 
       - name: Pack
-        run: dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./preview-packages /p:Version=${{ steps.version.outputs.version }}
+        id: pack
+        run: |
+          dotnet pack src/zachtbeer.SqlSchemaHasher.csproj -c Release --no-build -o ./preview-packages
+          package=$(basename ./preview-packages/*.nupkg .nupkg)
+          echo "version=${package#zachtbeer.SqlSchemaHasher.}" >> "$GITHUB_OUTPUT"
 
       - name: Upload packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -74,6 +72,6 @@ jobs:
             echo "## Preview package published"
             echo ""
             echo '```bash'
-            echo "dotnet add package zachtbeer.SqlSchemaHasher --version ${{ steps.version.outputs.version }}"
+            echo "dotnet add package zachtbeer.SqlSchemaHasher --version ${{ steps.pack.outputs.version }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

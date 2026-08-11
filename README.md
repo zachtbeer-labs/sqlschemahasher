@@ -37,7 +37,7 @@ var hash = await SqlSchemaHash.GetHashAsync("Server=localhost;Database=MyDb;Trus
 // Returns a versioned envelope: "2:dGhpcyBpcyBhIGJhc2U2NCBoYXNo..."
 ```
 
-The returned string is a **versioned envelope** — `<version>:<base64hash>` — not a bare hash. The `<version>` (the library's major version) lets you tell a genuine schema change apart from a library upgrade that changed how schemas are hashed. Compare envelopes with `SchemaHashResult` rather than raw string equality (see [Comparing hashes](#comparing-hashes)).
+The returned string is a **versioned envelope** — `<version>:<base64hash>` — not a bare hash. The `<version>` is the hash-format version — it lets you tell a genuine schema change apart from a library upgrade that changed how schemas are hashed. Compare envelopes with `SchemaHashResult` rather than raw string equality (see [Comparing hashes](#comparing-hashes)).
 
 ## Why Not Version Tables, Migration Journals, or Schema Compare?
 
@@ -138,7 +138,7 @@ var normalizedHash = SqlSchemaHash.ComputeHash(schema, new SchemaHashOptions
 
 Every hash is returned as a **versioned envelope**: `<version>:<base64hash>`, e.g. `2:dGhpcyBpc...`.
 
-- **`version`** — the library's major version. The hash output is stable within a major version and may change across majors (as extraction fidelity improves). This lets you tell a real schema change apart from a library upgrade.
+- **`version`** — the hash-format version, currently `2`. The hash output is stable within a hash-format version and changes only when the hash contract does (in practice at a major release, as extraction fidelity improves). This lets you tell a real schema change apart from a library upgrade.
 - **`hash`** — the base64 SHA256 of the schema.
 
 > **Compare only hashes computed with the same [options](#presets).** The envelope does not record which options were used, so a `V2` hash and a `Structural` hash of the *same* database have different hashes and compare as `Different` — indistinguishable from a genuine schema change. Fix your options in one place (a preset or shared config) and use them on both sides, the same way you would keep the library version consistent.

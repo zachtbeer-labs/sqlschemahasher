@@ -14,5 +14,18 @@
     <!-- Symbol packages -->
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!--
+      Versioning is tag-driven via MinVer: the git tag is the only source of truth, and no
+      <Version> lives in any csproj. A tagged commit builds as that version; an untagged one
+      builds as a height-based prerelease (e.g. 2.0.1-alpha.0.7).
+    -->
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <!--
+      Floor for untagged builds. v2.0.0 is not tagged yet, so without this the latest tag
+      (v1.0.0) would make in-development builds read as 1.0.1-alpha. Harmless to leave in
+      place once v2.0.0 ships — MinVer ignores it as soon as a higher tag exists.
+    -->
+    <MinVerMinimumMajorMinor>2.0</MinVerMinimumMajorMinor>
   </PropertyGroup>
 </Project>

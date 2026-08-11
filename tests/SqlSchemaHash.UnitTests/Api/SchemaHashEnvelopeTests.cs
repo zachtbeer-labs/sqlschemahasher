@@ -12,6 +12,18 @@ namespace SqlSchemaHash.UnitTests.Api;
 public class SchemaHashEnvelopeTests
 {
     [TestMethod]
+    public void ComputeHash_StampsTheCurrentHashFormatVersion()
+    {
+        // The hash-format version is a public data contract, deliberately decoupled from the
+        // package version (which MinVer derives from the git tag). This pins the stamp so it
+        // can never drift with how or where the assembly was built — a tagless or shallow
+        // clone must still produce "2:", not "0:".
+        var schema = new SchemaMetadata(new List<TableSchema>(), new List<StoredProcedureSchema>(), new List<UserDefinedTableTypeSchema>(), new List<ViewSchema>(), new List<FunctionSchema>(), new List<TriggerSchema>(), new List<SequenceSchema>(), new List<SynonymSchema>(), new List<ExtendedPropertySchema>());
+
+        zachtbeer.SqlSchemaHasher.SqlSchemaHash.ComputeHash(schema).ShouldStartWith("2:");
+    }
+
+    [TestMethod]
     public void ToString_RendersCanonicalEnvelope()
     {
         new SchemaHashResult(2, "dGhpcyBpc0hhc2g").ToString().ShouldBe("2:dGhpcyBpc0hhc2g");

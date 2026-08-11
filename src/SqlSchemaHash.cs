@@ -156,13 +156,17 @@ public static class SqlSchemaHash
     }
 
     /// <summary>
-    /// Resolves the hash-format version embedded in the envelope. Defaults to the assembly major version:
-    /// the hash output is contractually stable within a major and may change across majors. This is the
-    /// single swap point — replace the body with a <c>major =&gt; hashVersion</c> map if a future major
-    /// ever leaves the hash contract unchanged (or a minor is forced to break it).
+    /// The hash-format version stamped into the envelope. The hash output is contractually stable
+    /// within a hash-format version and may change across versions, so this is bumped deliberately
+    /// when the hash contract changes — in practice at a major release, but the two are not tied:
+    /// the package version comes from the git tag (MinVer) and must never be able to move this.
     /// </summary>
-    private static int ResolveHashFormatVersion()
-    {
-        return typeof(SqlSchemaHash).Assembly.GetName().Version?.Major ?? 0;
-    }
+    private const int HashFormatVersion = 2;
+
+    /// <summary>
+    /// Resolves the hash-format version embedded in the envelope. This is the single swap point —
+    /// replace the body with a <c>major =&gt; hashVersion</c> map if the library ever needs to stamp
+    /// different hash-format versions from one codebase.
+    /// </summary>
+    private static int ResolveHashFormatVersion() => HashFormatVersion;
 }

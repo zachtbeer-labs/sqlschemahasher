@@ -28,7 +28,7 @@ var hash = await SqlSchemaHash.GetHashAsync("Server=localhost;Database=MyDb;Trus
 // Returns a versioned envelope: "2:dGhpcyBpcyBhIGJhc2U2NCBoYXNo..."
 ```
 
-The returned string is a **versioned envelope** — `<version>:<base64hash>` — not a bare hash. The `<version>` (the library's major version) lets you tell a genuine schema change apart from a library upgrade that changed how schemas are hashed. Compare envelopes with `SchemaHashResult` rather than raw string equality — see [Comparing Hashes](./comparing-hashes.md).
+The returned string is a **versioned envelope** — `<version>:<base64hash>` — not a bare hash. The `<version>` is the hash-format version — it lets you tell a genuine schema change apart from a library upgrade that changed how schemas are hashed. Compare envelopes with `SchemaHashResult` rather than raw string equality — see [Comparing Hashes](./comparing-hashes.md).
 
 ## The public API
 

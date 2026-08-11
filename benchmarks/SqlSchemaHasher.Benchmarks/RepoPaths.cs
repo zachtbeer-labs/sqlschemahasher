@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace SqlSchemaHasher.Benchmarks;
 
 /// <summary>
@@ -24,10 +26,17 @@ internal static class RepoPaths
     /// Results directory for the library version under test, e.g. <c>benchmarks/results/2.0.0</c>.
     /// Version-scoping keeps each release's numbers as a distinct committed artifact.
     /// </summary>
+    /// <remarks>
+    /// Reads the informational version, not <c>AssemblyName.Version</c>: MinVer sets AssemblyVersion
+    /// to <c>{Major}.0.0.0</c> for every build in a major, which would route 2.1.0's results straight
+    /// over the committed 2.0.0 baseline. The informational version carries the full MinVer version,
+    /// so an untagged build lands in an obviously-scratch folder (<c>2.0.1-alpha.0.7</c>) instead of
+    /// overwriting a release's numbers. Build metadata is stripped — it is not part of the version.
+    /// </remarks>
     public static string ResultsDirectory()
     {
-        var version = typeof(zachtbeer.SqlSchemaHasher.SqlSchemaHash).Assembly.GetName().Version;
-        var folder = version is null ? "unknown" : $"{version.Major}.{version.Minor}.{version.Build}";
+        var informationalVersion = typeof(zachtbeer.SqlSchemaHasher.SqlSchemaHash).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        var folder = string.IsNullOrEmpty(informationalVersion) ? "unknown" : informationalVersion.Split('+')[0];
         return Path.Combine(RepoRoot(), "benchmarks", "results", folder);
     }
 }
